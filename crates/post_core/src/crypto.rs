@@ -181,6 +181,31 @@ pub fn sign_message(signing_key_bytes: &[u8], message: &[u8]) -> Result<Vec<u8>>
     let signing_key = SigningKey::from_bytes(&signing_key_array);
     let signature = signing_key.sign(message);
 
+    // Clear the signing key from memory
+    let mut signing_key_array = signing_key_array;
+    signing_key_array.fill(0);
+
+    Ok(signature.to_bytes().to_vec())
+}
+
+pub fn sign_message_with_signing_key(
+    signing_key_pair: &SigningKeyPair,
+    message: &[u8],
+) -> Result<Vec<u8>> {
+    use secrecy::ExposeSecret;
+    let signing_key_bytes = signing_key_pair.signing_key.expose_secret();
+    let signing_key_array: [u8; 32] = signing_key_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| PostError::Crypto("Invalid signing key length".to_string()))?;
+
+    let signing_key = SigningKey::from_bytes(&signing_key_array);
+    let signature = signing_key.sign(message);
+
+    // Clear the signing key from memory
+    let mut signing_key_array = signing_key_array;
+    signing_key_array.fill(0);
+
     Ok(signature.to_bytes().to_vec())
 }
 

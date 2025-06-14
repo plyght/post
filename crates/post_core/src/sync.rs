@@ -1,8 +1,8 @@
 use crate::{
-    derive_shared_secret, generate_keypair, generate_signing_keypair, sign_message,
-    verify_signature, ClipboardData, ClipboardManager, CryptoSession, KeyPair, MessageData,
-    MessageType, NodeDiscoveryData, NodeInfo, NodeMap, PostMessage, Result, SigningKeyPair,
-    SystemClipboard,
+    derive_shared_secret, generate_keypair, generate_signing_keypair,
+    sign_message_with_signing_key, verify_signature, ClipboardData, ClipboardManager,
+    CryptoSession, KeyPair, MessageData, MessageType, NodeDiscoveryData, NodeInfo, NodeMap,
+    PostMessage, Result, SigningKeyPair, SystemClipboard,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -131,17 +131,55 @@ impl SyncManager {
         signing_keypair: &SigningKeyPair,
         message: &[u8],
     ) -> Result<Vec<u8>> {
-        use secrecy::ExposeSecret;
-        let signing_key_bytes = signing_keypair.signing_key.expose_secret();
-        sign_message(signing_key_bytes, message)
+        sign_message_with_signing_key(signing_keypair, message)
+    }
+
+    async fn verify_message_signature(
+        &self,
+        message: &PostMessage,
+        source_node: &str,
+    ) -> Result<()> {
+        // Create a message copy without the signature for verification
+        let mut message_for_verification = message.clone();
+        message_for_verification.signature = Vec::new();
+
+        let message_bytes = serde_json::to_vec(&message_for_verification).map_err(|e| {
+            crate::PostError::Serialization(format!(
+                "Failed to serialize message for verification: {}",
+                e
+            ))
+        })?;
+
+        // Get the verifying key for this node
+        let node_keys = self.node_verifying_keys.lock().await;
+        let verifying_key = node_keys.get(source_node).ok_or_else(|| {
+            crate::PostError::Crypto(format!("No verifying key found for node: {}", source_node))
+        })?;
+
+        // Verify the signature
+        let signature_valid = verify_signature(verifying_key, &message_bytes, &message.signature)?;
+        if !signature_valid {
+            return Err(crate::PostError::Crypto(format!(
+                "Invalid signature on message from node: {}",
+                source_node
+            )));
+        }
+
+        Ok(())
     }
 
     pub async fn handle_message(&self, message: PostMessage) -> Result<()> {
         match &message.data {
             MessageData::ClipboardUpdate(data) => {
+                // Verify message signature
+                self.verify_message_signature(&message, &data.source_node)
+                    .await?;
                 self.handle_clipboard_update(data.clone()).await?;
             }
             MessageData::Heartbeat(data) => {
+                // Verify message signature
+                self.verify_message_signature(&message, &data.source_node)
+                    .await?;
                 self.handle_heartbeat(&data.source_node).await?;
             }
             MessageData::NodeDiscovery(data) => {
