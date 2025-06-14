@@ -1,6 +1,7 @@
 use crate::{PostError, Result};
 use copypasta::{ClipboardContext, ClipboardProvider};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
@@ -150,19 +151,17 @@ pub mod macos {
         fn sel_registerName(name: *const i8) -> *const c_void;
     }
 
-    static mut UNIVERSAL_CLIPBOARD_SUPPRESSED: bool = false;
+    static UNIVERSAL_CLIPBOARD_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
     pub fn suppress_universal_clipboard() -> Result<()> {
-        unsafe {
-            UNIVERSAL_CLIPBOARD_SUPPRESSED = true;
-        }
+        UNIVERSAL_CLIPBOARD_SUPPRESSED.store(true, Ordering::Relaxed);
         debug!("Suppressing macOS Universal Clipboard for this session");
         Ok(())
     }
 
     pub fn detect_universal_clipboard_event() -> Result<bool> {
-        unsafe {
-            if !UNIVERSAL_CLIPBOARD_SUPPRESSED {
+        if !UNIVERSAL_CLIPBOARD_SUPPRESSED.load(Ordering::Relaxed) {
+            unsafe {
                 // Basic detection - check if pasteboard name is accessible
                 let pasteboard_name = NSPasteboardNameGeneral();
                 if pasteboard_name.is_null() {

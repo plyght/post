@@ -6,6 +6,7 @@ use chacha20poly1305::{
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
+use secrecy::{ExposeSecret, Secret};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -18,10 +19,27 @@ pub struct KeyPair {
     pub private_key: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SigningKeyPair {
-    pub signing_key: Vec<u8>,
+    pub signing_key: Secret<Vec<u8>>,
     pub verifying_key: Vec<u8>,
+}
+
+impl Clone for SigningKeyPair {
+    fn clone(&self) -> Self {
+        Self {
+            signing_key: Secret::new(self.signing_key.expose_secret().clone()),
+            verifying_key: self.verifying_key.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for SigningKeyPair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigningKeyPair")
+            .field("signing_key", &"[REDACTED]")
+            .field("verifying_key", &format!("{:02x}{:02x}...", self.verifying_key[0], self.verifying_key[1]))
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -144,7 +162,7 @@ pub fn generate_signing_keypair() -> Result<SigningKeyPair> {
     let verifying_key = signing_key.verifying_key();
 
     Ok(SigningKeyPair {
-        signing_key: signing_key.to_bytes().to_vec(),
+        signing_key: Secret::new(signing_key.to_bytes().to_vec()),
         verifying_key: verifying_key.to_bytes().to_vec(),
     })
 }
@@ -176,7 +194,8 @@ pub fn verify_signature(
     let verifying_key = VerifyingKey::from_bytes(&verifying_key_array)
         .map_err(|e| PostError::Crypto(format!("Invalid verifying key: {}", e)))?;
 
-    let signature = Signature::from_bytes(&signature_array);
+    let signature = Signature::try_from(&signature_array[..])
+        .map_err(|e| PostError::Crypto(format!("Invalid signature format: {}", e)))?;
 
     match verifying_key.verify(message, &signature) {
         Ok(()) => Ok(true),

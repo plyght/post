@@ -20,6 +20,7 @@ x25519-dalek = "2.0"
 ed25519-dalek = "2.0"
 blake2 = "0.10"
 rand = "0.8"
+secrecy = "0.8"
 toml.workspace = true
 dirs.workspace = true
 hostname = "0.3"
