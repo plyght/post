@@ -1,7 +1,7 @@
 use crate::{PostError, Result};
 use copypasta::{ClipboardContext, ClipboardProvider};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 

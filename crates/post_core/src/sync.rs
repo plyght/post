@@ -1,6 +1,7 @@
 use crate::{
-    derive_shared_secret, generate_keypair, generate_signing_keypair, sign_message, ClipboardData, ClipboardManager,
-    CryptoSession, KeyPair, MessageData, MessageType, NodeDiscoveryData, NodeInfo, NodeMap, PostMessage, Result, SigningKeyPair,
+    derive_shared_secret, generate_keypair, generate_signing_keypair, sign_message,
+    verify_signature, ClipboardData, ClipboardManager, CryptoSession, KeyPair, MessageData,
+    MessageType, NodeDiscoveryData, NodeInfo, NodeMap, PostMessage, Result, SigningKeyPair,
     SystemClipboard,
 };
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ pub struct SyncManager {
     crypto_sessions: Arc<Mutex<HashMap<String, CryptoSession>>>,
     signing_keypair: SigningKeyPair,
     exchange_keypair: KeyPair,
+    node_verifying_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 impl SyncManager {
@@ -34,6 +36,7 @@ impl SyncManager {
             crypto_sessions: Arc::new(Mutex::new(HashMap::new())),
             signing_keypair,
             exchange_keypair,
+            node_verifying_keys: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -107,9 +110,16 @@ impl SyncManager {
         Ok(())
     }
 
-    fn sign_post_message(message: &mut PostMessage, signing_keypair: &SigningKeyPair) -> Result<()> {
-        let message_bytes = serde_json::to_vec(&message)
-            .map_err(|e| crate::PostError::Serialization(format!("Failed to serialize message: {}", e)))?;
+    fn sign_post_message(
+        message: &mut PostMessage,
+        signing_keypair: &SigningKeyPair,
+    ) -> Result<()> {
+        let mut message_for_signing = message.clone();
+        message_for_signing.signature = Vec::new();
+
+        let message_bytes = serde_json::to_vec(&message_for_signing).map_err(|e| {
+            crate::PostError::Serialization(format!("Failed to serialize message: {}", e))
+        })?;
 
         let signature = Self::sign_message_with_keypair(signing_keypair, &message_bytes)?;
         message.signature = signature;
@@ -117,35 +127,68 @@ impl SyncManager {
         Ok(())
     }
 
-    fn sign_message_with_keypair(signing_keypair: &SigningKeyPair, message: &[u8]) -> Result<Vec<u8>> {
+    fn sign_message_with_keypair(
+        signing_keypair: &SigningKeyPair,
+        message: &[u8],
+    ) -> Result<Vec<u8>> {
         use secrecy::ExposeSecret;
         let signing_key_bytes = signing_keypair.signing_key.expose_secret();
         sign_message(signing_key_bytes, message)
     }
 
     pub async fn handle_message(&self, message: PostMessage) -> Result<()> {
-        match message.data {
+        match &message.data {
             MessageData::ClipboardUpdate(data) => {
-                self.handle_clipboard_update(data).await?;
+                self.handle_clipboard_update(data.clone()).await?;
             }
             MessageData::Heartbeat(data) => {
                 self.handle_heartbeat(&data.source_node).await?;
             }
             MessageData::NodeDiscovery(data) => {
-                // Validate the public key
-                if data.public_key.len() != 32 {
+                // Create a message copy without the signature for verification
+                let mut message_for_verification = message.clone();
+                message_for_verification.signature = Vec::new();
+
+                let message_bytes = serde_json::to_vec(&message_for_verification).map_err(|e| {
+                    crate::PostError::Serialization(format!(
+                        "Failed to serialize message for verification: {}",
+                        e
+                    ))
+                })?;
+
+                // Verify the signature
+                let signature_valid =
+                    verify_signature(&data.signing_public_key, &message_bytes, &message.signature)?;
+                if !signature_valid {
                     return Err(crate::PostError::Crypto(
-                        "Invalid X25519 public key length, expected 32 bytes".to_string()
+                        "Invalid Ed25519 signature on node discovery message".to_string(),
                     ));
                 }
-                
+
                 // Validate that the key is not all zeros (common security mistake)
                 if data.public_key.iter().all(|&b| b == 0) {
                     return Err(crate::PostError::Crypto(
-                        "Invalid X25519 public key: all zeros".to_string()
+                        "Invalid X25519 public key: all zeros".to_string(),
                     ));
                 }
-                
+
+                // Store the binding between source_node and verifying key
+                let mut node_keys = self.node_verifying_keys.lock().await;
+                if let Some(existing_key) = node_keys.get(&data.source_node) {
+                    // Verify the node is still using the same verifying key
+                    if existing_key != &data.signing_public_key.to_vec() {
+                        return Err(crate::PostError::Crypto(format!(
+                            "Node {} attempted to change verifying key",
+                            data.source_node
+                        )));
+                    }
+                } else {
+                    // Store the new binding
+                    node_keys.insert(data.source_node.clone(), data.signing_public_key.to_vec());
+                }
+                drop(node_keys);
+
+                // Only now proceed with session derivation after successful verification
                 self.handle_node_discovery(&data.source_node, &data.public_key)
                     .await?;
             }
@@ -191,7 +234,11 @@ impl SyncManager {
         Ok(())
     }
 
-    async fn handle_node_discovery(&self, node_id: &str, remote_public_key: &[u8]) -> Result<()> {
+    async fn handle_node_discovery(
+        &self,
+        node_id: &str,
+        remote_public_key: &[u8; 32],
+    ) -> Result<()> {
         let mut nodes = self.nodes.write().await;
         if !nodes.contains_key(node_id) {
             let node_info = NodeInfo {
@@ -268,7 +315,22 @@ impl SyncManager {
         let discovery_data = NodeDiscoveryData {
             source_node: self.node_id.clone(),
             timestamp,
-            public_key: self.exchange_keypair.public_key.clone(),
+            public_key: self
+                .exchange_keypair
+                .public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| {
+                    crate::PostError::Crypto("Exchange public key must be 32 bytes".to_string())
+                })?,
+            signing_public_key: self
+                .signing_keypair
+                .verifying_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| {
+                    crate::PostError::Crypto("Signing public key must be 32 bytes".to_string())
+                })?,
         };
 
         let mut message = PostMessage {
@@ -280,7 +342,7 @@ impl SyncManager {
 
         // Sign the message
         Self::sign_post_message(&mut message, &self.signing_keypair)?;
-        
+
         Ok(message)
     }
 }

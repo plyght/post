@@ -27,7 +27,10 @@ pub struct ClipboardData {
 pub struct NodeDiscoveryData {
     pub source_node: String,
     pub timestamp: u64,
-    pub public_key: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub public_key: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub signing_public_key: [u8; 32],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

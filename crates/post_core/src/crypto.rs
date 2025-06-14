@@ -37,7 +37,13 @@ impl std::fmt::Debug for SigningKeyPair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SigningKeyPair")
             .field("signing_key", &"[REDACTED]")
-            .field("verifying_key", &format!("{:02x}{:02x}...", self.verifying_key[0], self.verifying_key[1]))
+            .field(
+                "verifying_key",
+                &format!(
+                    "{:02x}{:02x}...",
+                    self.verifying_key[0], self.verifying_key[1]
+                ),
+            )
             .finish()
     }
 }
