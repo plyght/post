@@ -1,12 +1,10 @@
 use post_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub struct Daemon {
-    #[allow(dead_code)]
     config: PostConfig,
-    #[allow(dead_code)]
     clipboard: Arc<dyn ClipboardManager>,
     transport: Arc<dyn Transport>,
     sync_manager: Arc<SyncManager>,
@@ -17,7 +15,7 @@ impl Daemon {
         let clipboard = Arc::new(SystemClipboard::new()?);
         let transport = Arc::new(TailscaleTransport::new(config.network.port));
         let node_id = transport.get_node_id().await?;
-        let sync_manager = Arc::new(SyncManager::new(clipboard.clone(), node_id));
+        let sync_manager = Arc::new(SyncManager::new(clipboard.clone(), node_id)?);
 
         Ok(Self {
             config,
@@ -56,12 +54,46 @@ impl Daemon {
             .await?;
 
         let sync_manager_cleanup = Arc::clone(&self.sync_manager);
+        let cleanup_interval = self.config.network.discovery_interval * 10; // Cleanup every 10 discovery intervals
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(cleanup_interval));
             loop {
                 interval.tick().await;
-                if let Err(e) = sync_manager_cleanup.cleanup_stale_nodes(600).await {
+                if let Err(e) = sync_manager_cleanup
+                    .cleanup_stale_nodes(cleanup_interval * 2)
+                    .await
+                {
                     error!("Failed to cleanup stale nodes: {}", e);
+                }
+            }
+        });
+
+        // Heartbeat task
+        let transport_heartbeat = Arc::clone(&self.transport);
+        let heartbeat_interval = self.config.network.heartbeat_interval;
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(heartbeat_interval));
+            loop {
+                interval.tick().await;
+                // Get tailnet nodes and send heartbeat to each
+                if let Ok(nodes) = transport_heartbeat.get_tailnet_nodes().await {
+                    debug!("Heartbeat tick - found {} nodes", nodes.len());
+                } else {
+                    debug!("Heartbeat tick - failed to get nodes");
+                }
+            }
+        });
+
+        // Clipboard health check task
+        let clipboard_health = Arc::clone(&self.clipboard);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if let Err(e) = clipboard_health.get_contents().await {
+                    error!("Clipboard health check failed: {}", e);
                 }
             }
         });

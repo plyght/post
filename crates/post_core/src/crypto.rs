@@ -4,6 +4,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -17,6 +18,13 @@ pub struct KeyPair {
     pub private_key: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigningKeyPair {
+    pub signing_key: Vec<u8>,
+    pub verifying_key: Vec<u8>,
+}
+
+#[derive(Clone)]
 pub struct CryptoSession {
     cipher: Arc<Mutex<ChaCha20Poly1305>>,
     nonce_counter: Arc<Mutex<u64>>,
@@ -126,4 +134,52 @@ pub fn derive_key_from_tailscale_identity(identity: &[u8]) -> Result<[u8; 32]> {
 
     debug!("Derived key from Tailscale identity");
     Ok(result.into())
+}
+
+pub fn generate_signing_keypair() -> Result<SigningKeyPair> {
+    let mut secret_key_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut secret_key_bytes);
+
+    let signing_key = SigningKey::from_bytes(&secret_key_bytes);
+    let verifying_key = signing_key.verifying_key();
+
+    Ok(SigningKeyPair {
+        signing_key: signing_key.to_bytes().to_vec(),
+        verifying_key: verifying_key.to_bytes().to_vec(),
+    })
+}
+
+pub fn sign_message(signing_key_bytes: &[u8], message: &[u8]) -> Result<Vec<u8>> {
+    let signing_key_array: [u8; 32] = signing_key_bytes
+        .try_into()
+        .map_err(|_| PostError::Crypto("Invalid signing key length".to_string()))?;
+
+    let signing_key = SigningKey::from_bytes(&signing_key_array);
+    let signature = signing_key.sign(message);
+
+    Ok(signature.to_bytes().to_vec())
+}
+
+pub fn verify_signature(
+    verifying_key_bytes: &[u8],
+    message: &[u8],
+    signature_bytes: &[u8],
+) -> Result<bool> {
+    let verifying_key_array: [u8; 32] = verifying_key_bytes
+        .try_into()
+        .map_err(|_| PostError::Crypto("Invalid verifying key length".to_string()))?;
+
+    let signature_array: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| PostError::Crypto("Invalid signature length".to_string()))?;
+
+    let verifying_key = VerifyingKey::from_bytes(&verifying_key_array)
+        .map_err(|e| PostError::Crypto(format!("Invalid verifying key: {}", e)))?;
+
+    let signature = Signature::from_bytes(&signature_array);
+
+    match verifying_key.verify(message, &signature) {
+        Ok(()) => Ok(true),
+        Err(_) => Ok(false),
+    }
 }

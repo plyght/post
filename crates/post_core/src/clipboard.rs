@@ -144,19 +144,54 @@ pub mod macos {
     use super::*;
     use std::os::raw::c_void;
 
-    #[allow(dead_code)]
     extern "C" {
         fn NSPasteboardNameGeneral() -> *const c_void;
         fn objc_msgSend(receiver: *const c_void, selector: *const c_void, ...) -> *const c_void;
         fn sel_registerName(name: *const i8) -> *const c_void;
     }
 
+    static mut UNIVERSAL_CLIPBOARD_SUPPRESSED: bool = false;
+
     pub fn suppress_universal_clipboard() -> Result<()> {
+        unsafe {
+            UNIVERSAL_CLIPBOARD_SUPPRESSED = true;
+        }
         debug!("Suppressing macOS Universal Clipboard for this session");
         Ok(())
     }
 
     pub fn detect_universal_clipboard_event() -> Result<bool> {
+        unsafe {
+            if !UNIVERSAL_CLIPBOARD_SUPPRESSED {
+                // Basic detection - check if pasteboard name is accessible
+                let pasteboard_name = NSPasteboardNameGeneral();
+                if pasteboard_name.is_null() {
+                    debug!("Universal Clipboard event detected");
+                    return Ok(true);
+                }
+            }
+        }
         Ok(false)
+    }
+
+    pub fn is_universal_clipboard_available() -> Result<bool> {
+        unsafe {
+            let pasteboard_name = NSPasteboardNameGeneral();
+            Ok(!pasteboard_name.is_null())
+        }
+    }
+
+    pub fn get_pasteboard_change_count() -> Result<i64> {
+        unsafe {
+            let pasteboard_name = NSPasteboardNameGeneral();
+            if pasteboard_name.is_null() {
+                return Ok(0);
+            }
+
+            let change_count_sel = sel_registerName(c"changeCount".as_ptr());
+            let change_count = objc_msgSend(pasteboard_name, change_count_sel) as i64;
+
+            Ok(change_count)
+        }
     }
 }

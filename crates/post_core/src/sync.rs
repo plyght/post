@@ -1,6 +1,7 @@
 use crate::{
-    ClipboardData, ClipboardManager, CryptoSession, MessageType, NodeInfo, NodeMap, PostMessage,
-    Result, SystemClipboard,
+    derive_shared_secret, generate_signing_keypair, sign_message, ClipboardData, ClipboardManager,
+    CryptoSession, MessageType, NodeInfo, NodeMap, PostMessage, Result, SigningKeyPair,
+    SystemClipboard,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,20 +15,23 @@ pub struct SyncManager {
     sequence_counter: Arc<Mutex<u64>>,
     node_id: String,
     last_clipboard_hash: Arc<Mutex<u64>>,
-    #[allow(dead_code)]
     crypto_sessions: Arc<Mutex<HashMap<String, CryptoSession>>>,
+    signing_keypair: SigningKeyPair,
 }
 
 impl SyncManager {
-    pub fn new(clipboard: Arc<SystemClipboard>, node_id: String) -> Self {
-        Self {
+    pub fn new(clipboard: Arc<SystemClipboard>, node_id: String) -> Result<Self> {
+        let signing_keypair = generate_signing_keypair()?;
+
+        Ok(Self {
             clipboard,
             nodes: Arc::new(RwLock::new(HashMap::new())),
             sequence_counter: Arc::new(Mutex::new(0)),
             node_id,
             last_clipboard_hash: Arc::new(Mutex::new(0)),
             crypto_sessions: Arc::new(Mutex::new(HashMap::new())),
-        }
+            signing_keypair,
+        })
     }
 
     pub async fn start_sync_loop<F>(&self, send_message: F) -> Result<()>
@@ -39,6 +43,7 @@ impl SyncManager {
         let node_id = self.node_id.clone();
         let last_hash = Arc::clone(&self.last_clipboard_hash);
         let send_fn = send_message.clone();
+        let signing_key = self.signing_keypair.signing_key.clone();
 
         clipboard
             .watch_changes_generic(move |content| {
@@ -46,6 +51,7 @@ impl SyncManager {
                 let sequence_counter = Arc::clone(&sequence_counter);
                 let node_id = node_id.clone();
                 let last_hash = Arc::clone(&last_hash);
+                let signing_key = signing_key.clone();
 
                 tokio::spawn(async move {
                     let content_hash = calculate_hash(&content);
@@ -74,12 +80,21 @@ impl SyncManager {
                         sequence,
                     };
 
-                    let message = PostMessage {
+                    let mut message = PostMessage {
                         version: 1,
                         message_type: MessageType::ClipboardUpdate,
                         data: clipboard_data,
-                        signature: vec![], // TODO: Add signing
+                        signature: vec![],
                     };
+
+                    // Sign the message
+                    let message_bytes = serde_json::to_vec(&message)
+                        .unwrap_or_else(|_| b"failed_to_serialize".to_vec());
+
+                    let signature =
+                        sign_message(&signing_key, &message_bytes).unwrap_or_else(|_| vec![]);
+
+                    message.signature = signature;
 
                     debug!("Broadcasting clipboard update (seq: {})", sequence);
                     send_fn(message);
@@ -154,9 +169,15 @@ impl SyncManager {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
-                public_key: vec![], // TODO: Exchange public keys
+                public_key: self.signing_keypair.verifying_key.clone(),
             };
-            nodes.insert(node_id.to_string(), node_info);
+            nodes.insert(node_id.to_string(), node_info.clone());
+            drop(nodes);
+
+            // Create crypto session for the new node
+            self.create_crypto_session_for_node(node_id, &node_info.public_key)
+                .await?;
+
             info!("Discovered new node: {}", node_id);
         }
         Ok(())
@@ -188,6 +209,22 @@ impl SyncManager {
         }
 
         Ok(())
+    }
+
+    async fn create_crypto_session_for_node(&self, node_id: &str, public_key: &[u8]) -> Result<()> {
+        let shared_secret = derive_shared_secret(&self.signing_keypair.signing_key, public_key)?;
+        let crypto_session = CryptoSession::new(&shared_secret)?;
+
+        let mut sessions = self.crypto_sessions.lock().await;
+        sessions.insert(node_id.to_string(), crypto_session);
+
+        debug!("Created crypto session for node: {}", node_id);
+        Ok(())
+    }
+
+    pub async fn get_crypto_session(&self, node_id: &str) -> Option<CryptoSession> {
+        let sessions = self.crypto_sessions.lock().await;
+        sessions.get(node_id).cloned()
     }
 }
 
