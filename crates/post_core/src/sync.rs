@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info};
+use x25519_dalek;
 
 pub struct SyncManager {
     clipboard: Arc<SystemClipboard>,
@@ -19,7 +20,7 @@ pub struct SyncManager {
     crypto_sessions: Arc<Mutex<HashMap<String, CryptoSession>>>,
     signing_keypair: SigningKeyPair,
     exchange_keypair: KeyPair,
-    node_verifying_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    node_verifying_keys: Arc<Mutex<HashMap<String, [u8; 32]>>>,
 }
 
 impl SyncManager {
@@ -214,7 +215,7 @@ impl SyncManager {
                 let mut node_keys = self.node_verifying_keys.lock().await;
                 if let Some(existing_key) = node_keys.get(&data.source_node) {
                     // Verify the node is still using the same verifying key
-                    if existing_key != &data.signing_public_key.to_vec() {
+                    if existing_key != &data.signing_public_key {
                         return Err(crate::PostError::Crypto(format!(
                             "Node {} attempted to change verifying key",
                             data.source_node
@@ -222,7 +223,7 @@ impl SyncManager {
                     }
                 } else {
                     // Store the new binding
-                    node_keys.insert(data.source_node.clone(), data.signing_public_key.to_vec());
+                    node_keys.insert(data.source_node.clone(), data.signing_public_key);
                 }
                 drop(node_keys);
 
@@ -329,7 +330,23 @@ impl SyncManager {
     }
 
     async fn create_crypto_session_for_node(&self, node_id: &str, public_key: &[u8]) -> Result<()> {
-        let shared_secret = derive_shared_secret(&self.exchange_keypair.private_key, public_key)?;
+        // Validate public key by parsing into x25519_dalek::PublicKey
+        let public_key_array: [u8; 32] = public_key
+            .try_into()
+            .map_err(|_| crate::PostError::Crypto("Invalid public key length".to_string()))?;
+
+        // Check if public key is all zeros (invalid/weak key)
+        if public_key_array.iter().all(|&b| b == 0) {
+            return Err(crate::PostError::Crypto(
+                "Invalid public key: all zeros".to_string(),
+            ));
+        }
+
+        // Parse into PublicKey to validate it's a valid point
+        let _parsed_public_key = x25519_dalek::PublicKey::from(public_key_array);
+
+        let shared_secret =
+            derive_shared_secret(&self.exchange_keypair.private_key, &public_key_array)?;
         let crypto_session = CryptoSession::new(&shared_secret)?;
 
         let mut sessions = self.crypto_sessions.lock().await;
@@ -353,22 +370,16 @@ impl SyncManager {
         let discovery_data = NodeDiscoveryData {
             source_node: self.node_id.clone(),
             timestamp,
-            public_key: self
-                .exchange_keypair
-                .public_key
-                .as_slice()
-                .try_into()
+            public_key: *<&[u8; 32]>::try_from(self.exchange_keypair.public_key.as_slice())
                 .map_err(|_| {
                     crate::PostError::Crypto("Exchange public key must be 32 bytes".to_string())
                 })?,
-            signing_public_key: self
-                .signing_keypair
-                .verifying_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| {
-                    crate::PostError::Crypto("Signing public key must be 32 bytes".to_string())
-                })?,
+            signing_public_key: *<&[u8; 32]>::try_from(
+                self.signing_keypair.verifying_key.as_slice(),
+            )
+            .map_err(|_| {
+                crate::PostError::Crypto("Signing public key must be 32 bytes".to_string())
+            })?,
         };
 
         let mut message = PostMessage {
