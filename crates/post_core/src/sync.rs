@@ -1,9 +1,8 @@
 use crate::{
     derive_shared_secret, generate_keypair, generate_signing_keypair, sign_message, ClipboardData, ClipboardManager,
-    CryptoSession, KeyPair, MessageType, NodeInfo, NodeMap, PostMessage, Result, SigningKeyPair,
+    CryptoSession, KeyPair, MessageData, MessageType, NodeDiscoveryData, NodeInfo, NodeMap, PostMessage, Result, SigningKeyPair,
     SystemClipboard,
 };
-use secrecy::ExposeSecret;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,7 +46,7 @@ impl SyncManager {
         let node_id = self.node_id.clone();
         let last_hash = Arc::clone(&self.last_clipboard_hash);
         let send_fn = send_message.clone();
-        let signing_key = self.signing_keypair.signing_key.expose_secret().clone();
+        let signing_keypair = self.signing_keypair.clone();
 
         clipboard
             .watch_changes_generic(move |content| {
@@ -55,7 +54,7 @@ impl SyncManager {
                 let sequence_counter = Arc::clone(&sequence_counter);
                 let node_id = node_id.clone();
                 let last_hash = Arc::clone(&last_hash);
-                let signing_key = signing_key.clone();
+                let signing_keypair = signing_keypair.clone();
 
                 tokio::spawn(async move {
                     let content_hash = calculate_hash(&content);
@@ -87,12 +86,12 @@ impl SyncManager {
                     let mut message = PostMessage {
                         version: 1,
                         message_type: MessageType::ClipboardUpdate,
-                        data: clipboard_data,
+                        data: MessageData::ClipboardUpdate(clipboard_data),
                         signature: vec![],
                     };
 
                     // Sign the message
-                    match Self::sign_post_message(&mut message, &signing_key) {
+                    match Self::sign_post_message(&mut message, &signing_keypair) {
                         Ok(()) => {
                             debug!("Broadcasting clipboard update (seq: {})", sequence);
                             send_fn(message);
@@ -108,29 +107,46 @@ impl SyncManager {
         Ok(())
     }
 
-    fn sign_post_message(message: &mut PostMessage, signing_key: &[u8]) -> Result<()> {
+    fn sign_post_message(message: &mut PostMessage, signing_keypair: &SigningKeyPair) -> Result<()> {
         let message_bytes = serde_json::to_vec(&message)
             .map_err(|e| crate::PostError::Serialization(format!("Failed to serialize message: {}", e)))?;
 
-        let signature = sign_message(signing_key, &message_bytes)?;
+        let signature = Self::sign_message_with_keypair(signing_keypair, &message_bytes)?;
         message.signature = signature;
 
         Ok(())
     }
 
+    fn sign_message_with_keypair(signing_keypair: &SigningKeyPair, message: &[u8]) -> Result<Vec<u8>> {
+        use secrecy::ExposeSecret;
+        let signing_key_bytes = signing_keypair.signing_key.expose_secret();
+        sign_message(signing_key_bytes, message)
+    }
+
     pub async fn handle_message(&self, message: PostMessage) -> Result<()> {
-        match message.message_type {
-            MessageType::ClipboardUpdate => {
-                self.handle_clipboard_update(message.data).await?;
+        match message.data {
+            MessageData::ClipboardUpdate(data) => {
+                self.handle_clipboard_update(data).await?;
             }
-            MessageType::Heartbeat => {
-                self.handle_heartbeat(&message.data.source_node).await?;
+            MessageData::Heartbeat(data) => {
+                self.handle_heartbeat(&data.source_node).await?;
             }
-            MessageType::NodeDiscovery => {
-                // TODO: Extract the actual remote node's X25519 public key from the message
-                // For now, using a placeholder - this should be the remote node's exchange public key
-                let placeholder_key = vec![0u8; 32]; // This needs to be replaced with actual key extraction
-                self.handle_node_discovery(&message.data.source_node, &placeholder_key)
+            MessageData::NodeDiscovery(data) => {
+                // Validate the public key
+                if data.public_key.len() != 32 {
+                    return Err(crate::PostError::Crypto(
+                        "Invalid X25519 public key length, expected 32 bytes".to_string()
+                    ));
+                }
+                
+                // Validate that the key is not all zeros (common security mistake)
+                if data.public_key.iter().all(|&b| b == 0) {
+                    return Err(crate::PostError::Crypto(
+                        "Invalid X25519 public key: all zeros".to_string()
+                    ));
+                }
+                
+                self.handle_node_discovery(&data.source_node, &data.public_key)
                     .await?;
             }
         }
@@ -241,6 +257,31 @@ impl SyncManager {
     pub async fn get_crypto_session(&self, node_id: &str) -> Option<CryptoSession> {
         let sessions = self.crypto_sessions.lock().await;
         sessions.get(node_id).cloned()
+    }
+
+    pub fn create_node_discovery_message(&self) -> Result<PostMessage> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let discovery_data = NodeDiscoveryData {
+            source_node: self.node_id.clone(),
+            timestamp,
+            public_key: self.exchange_keypair.public_key.clone(),
+        };
+
+        let mut message = PostMessage {
+            version: 1,
+            message_type: MessageType::NodeDiscovery,
+            data: MessageData::NodeDiscovery(discovery_data),
+            signature: vec![],
+        };
+
+        // Sign the message
+        Self::sign_post_message(&mut message, &self.signing_keypair)?;
+        
+        Ok(message)
     }
 }
 

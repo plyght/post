@@ -24,10 +24,30 @@ pub struct ClipboardData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeDiscoveryData {
+    pub source_node: String,
+    pub timestamp: u64,
+    pub public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatData {
+    pub source_node: String,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MessageData {
+    ClipboardUpdate(ClipboardData),
+    NodeDiscovery(NodeDiscoveryData),
+    Heartbeat(HeartbeatData),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostMessage {
     pub version: u8,
     pub message_type: MessageType,
-    pub data: ClipboardData,
+    pub data: MessageData,
     pub signature: Vec<u8>,
 }
 
