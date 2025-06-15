@@ -31,6 +31,7 @@ ratatui = "0.26"
 crossterm = "0.27"
 clap = { version = "4.0", features = ["derive"] }
 async-trait = "0.1"
+tailscale-localapi = "0.1"
 
 [package]
 name = "post"

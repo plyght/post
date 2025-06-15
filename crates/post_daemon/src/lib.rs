@@ -1,7 +1,7 @@
 use post_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct Daemon {
     config: PostConfig,
@@ -13,9 +13,32 @@ pub struct Daemon {
 impl Daemon {
     pub async fn new(config: PostConfig) -> Result<Self> {
         let clipboard = Arc::new(SystemClipboard::new()?);
-        let transport = Arc::new(TailscaleTransport::new(config.network.port));
+
+        // Use the new detection method that tries multiple socket paths
+        let transport = match TailscaleTransport::new_with_detection(config.network.port).await {
+            Ok(transport) => Arc::new(transport),
+            Err(e) => {
+                // Fallback to old method for compatibility
+                warn!(
+                    "Failed to detect Tailscale with new method: {}, falling back to default",
+                    e
+                );
+                let transport = Arc::new(TailscaleTransport::new(config.network.port));
+
+                // Check Tailscale connectivity before proceeding
+                if !transport.is_connected().await? {
+                    return Err(PostError::Tailscale(
+                        "Tailscale is not connected. Please ensure Tailscale is running and connected to your tailnet.".to_string()
+                    ));
+                }
+                transport
+            }
+        };
+
         let node_id = transport.get_node_id().await?;
-        let sync_manager = Arc::new(SyncManager::new(clipboard.clone(), node_id)?);
+        let sync_manager = Arc::new(SyncManager::new(clipboard.clone(), node_id.clone())?);
+
+        info!("Daemon initialized with Tailscale node ID: {}", node_id);
 
         Ok(Self {
             config,
@@ -94,6 +117,26 @@ impl Daemon {
                 interval.tick().await;
                 if let Err(e) = clipboard_health.get_contents().await {
                     error!("Clipboard health check failed: {}", e);
+                }
+            }
+        });
+
+        // Tailscale connectivity health check task
+        let transport_health = Arc::clone(&self.transport);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                match transport_health.is_connected().await {
+                    Ok(true) => {
+                        debug!("Tailscale connectivity check: OK");
+                    }
+                    Ok(false) => {
+                        error!("Tailscale connectivity check: FAILED - Tailscale not connected");
+                    }
+                    Err(e) => {
+                        error!("Tailscale connectivity check: ERROR - {}", e);
+                    }
                 }
             }
         });

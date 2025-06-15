@@ -1,13 +1,14 @@
 use clap::{Parser, Subcommand};
 use post_core::*;
 use std::sync::Arc;
+use tracing::info;
 
 #[cfg(feature = "tui")]
 use post_tui::{run_tui, App};
 
 #[derive(Parser)]
 #[command(name = "post")]
-#[command(about = "Universal clipboard sync for Tailscale")]
+#[command(about = "Universal clipboard sync daemon for Tailscale")]
 #[command(version = "0.1.0")]
 struct Args {
     #[command(subcommand)]
@@ -18,6 +19,9 @@ struct Args {
 
     #[arg(short, long)]
     verbose: bool,
+
+    #[arg(short, long)]
+    foreground: bool,
 }
 
 #[derive(Subcommand)]
@@ -52,7 +56,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    if args.verbose {
+    if args.verbose || args.foreground {
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
             .init();
@@ -71,15 +75,43 @@ async fn main() -> Result<()> {
 
     match args.command {
         Some(Commands::Status) => {
-            let transport = TailscaleTransport::new(config.network.port);
-            let node_id = transport.get_node_id().await?;
-            let nodes = transport.get_tailnet_nodes().await?;
-
             println!("Post Clipboard Status");
-            println!("Node ID: {}", node_id);
-            println!("Connected nodes: {}", nodes.len());
-            for node in nodes {
-                println!("  - {}", node);
+
+            // Try the improved detection method first
+            match TailscaleTransport::new_with_detection(config.network.port).await {
+                Ok(transport) => {
+                    println!("Tailscale: Connected");
+
+                    match transport.get_node_id().await {
+                        Ok(node_id) => println!("Node ID: {}", node_id),
+                        Err(e) => println!("Node ID: Failed to get ({:?})", e),
+                    }
+
+                    match transport.get_tailnet_nodes().await {
+                        Ok(nodes) => {
+                            println!("Connected nodes: {}", nodes.len());
+                            for node in nodes {
+                                println!("  - {}", node);
+                            }
+                        }
+                        Err(e) => println!("Connected nodes: Failed to get ({:?})", e),
+                    }
+                }
+                Err(e) => {
+                    println!("Tailscale: Could not connect to daemon");
+                    println!("Error: {}", e);
+                    println!("Please ensure Tailscale is installed and running");
+
+                    // Show what paths were tried for debugging
+                    if args.verbose {
+                        println!("\nDebugging information:");
+                        let paths = TailscaleTransport::get_possible_socket_paths();
+                        for path in paths {
+                            let exists = std::path::Path::new(&path).exists();
+                            println!("  Tried: {} (exists: {})", path, exists);
+                        }
+                    }
+                }
             }
         }
 
@@ -119,17 +151,16 @@ async fn main() -> Result<()> {
         }
 
         None => {
-            #[cfg(feature = "tui")]
-            {
-                let app = Arc::new(App::new(config));
-                run_tui(app).await?;
+            // Default behavior: start the daemon
+            info!("Starting Post daemon (use --help for other options)");
+
+            if !args.foreground {
+                #[cfg(unix)]
+                post_daemon::daemonize().await?;
             }
 
-            #[cfg(not(feature = "tui"))]
-            {
-                println!("Post clipboard sync tool");
-                println!("Use 'post --help' for available commands");
-            }
+            let daemon = post_daemon::Daemon::new(config).await?;
+            daemon.run().await?;
         }
     }
 
