@@ -58,7 +58,7 @@ impl TailscaleTransport {
         debug!("Sending message to {}: {} bytes", node_ip, serialized.len());
 
         let mut cmd = Command::new("nc")
-            .args(&["-q", "1", node_ip, &self.port.to_string()])
+            .args(["-q", "1", node_ip, &self.port.to_string()])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -119,7 +119,7 @@ impl Transport for TailscaleTransport {
         info!("Starting TCP listener on port {}", self.port);
 
         let mut cmd = Command::new("nc")
-            .args(&["-l", "-k", &self.port.to_string()])
+            .args(["-l", "-k", &self.port.to_string()])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
