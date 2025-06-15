@@ -27,6 +27,7 @@ dirs.workspace = true
 hostname = "0.3"
 async-trait.workspace = true
 tailscale-localapi.workspace = true
+reqwest.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

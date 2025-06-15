@@ -110,6 +110,13 @@ async fn main() -> Result<()> {
                             let exists = std::path::Path::new(&path).exists();
                             println!("  Tried: {} (exists: {})", path, exists);
                         }
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            if let Some(tcp_port) = TailscaleTransport::detect_macos_tcp_port() {
+                                println!("  Tried: TCP localhost:{}", tcp_port);
+                            }
+                        }
                     }
                 }
             }
