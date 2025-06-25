@@ -369,7 +369,7 @@ impl SyncManager {
         let mut sessions = self.crypto_sessions.lock().await;
         sessions.insert(node_id.to_string(), crypto_session);
 
-        debug!("Created crypto session for node: {}", node_id);
+        info!("Created crypto session for node: {}", node_id);
         Ok(())
     }
 
