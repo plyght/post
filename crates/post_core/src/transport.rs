@@ -483,9 +483,15 @@ impl Transport for TailscaleTransport {
         }
 
         for node in &nodes {
-            if let Err(e) = self.send_to_node(node, &message).await {
-                warn!("Failed to send message to {}: {}", node, e);
-                errors.push(e);
+            match self.send_to_node(node, &message).await {
+                Ok(()) => {
+                    debug!("Successfully sent message to {}", node);
+                }
+                Err(e) => {
+                    // Only log as debug since it's expected that some nodes might not be running the daemon
+                    debug!("Failed to send message to {}: {}", node, e);
+                    errors.push(e);
+                }
             }
         }
 
@@ -495,7 +501,12 @@ impl Transport for TailscaleTransport {
             ));
         }
 
-        debug!("Message sent to {} nodes", nodes.len() - errors.len());
+        let successful_sends = nodes.len() - errors.len();
+        if successful_sends > 0 {
+            info!("Message sent to {} of {} nodes", successful_sends, nodes.len());
+        } else {
+            debug!("No nodes were reachable (this is normal if other nodes don't have the daemon running)");
+        }
         Ok(())
     }
 

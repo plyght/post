@@ -94,6 +94,15 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    // Handle config command first, before trying to load config
+    if let Some(Commands::Config) = args.command {
+        let config_path = PostConfig::config_path()?;
+        let config = PostConfig::default();
+        config.save().await?;
+        println!("Generated default config at: {}", config_path.display());
+        return Ok(());
+    }
+
     let config = if let Some(ref config_path) = args.config {
         let contents = tokio::fs::read_to_string(config_path).await?;
         toml::from_str(&contents)?
@@ -364,10 +373,8 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::Config) => {
-            let config_path = PostConfig::config_path()?;
-            let config = PostConfig::default();
-            config.save().await?;
-            println!("Generated default config at: {}", config_path.display());
+            // This is handled earlier in main() before config loading
+            unreachable!("Config command should be handled before this match")
         }
 
         None => {

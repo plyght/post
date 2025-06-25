@@ -135,9 +135,9 @@ impl Default for PostConfig {
 
 impl PostConfig {
     pub fn config_dir() -> Result<PathBuf> {
-        dirs::config_dir()
-            .map(|d| d.join("post"))
-            .ok_or_else(|| PostError::Config("Unable to determine config directory".to_string()))
+        dirs::home_dir()
+            .map(|d| d.join(".config").join("post"))
+            .ok_or_else(|| PostError::Config("Unable to determine home directory".to_string()))
     }
 
     pub fn config_path() -> Result<PathBuf> {
