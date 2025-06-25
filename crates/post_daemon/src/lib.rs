@@ -112,6 +112,18 @@ impl Daemon {
         // Start sync loop only if we have a sync manager
         if let Some(sync_manager) = sync_manager_clone.lock().await.as_ref() {
             let sync_manager_ref = Arc::clone(sync_manager);
+            let transport_discovery = Arc::clone(&transport_send);
+
+            // Send initial node discovery message
+            let discovery_message = sync_manager_ref.create_node_discovery_message().await?;
+            tokio::spawn(async move {
+                if let Err(e) = transport_discovery.send_message(discovery_message).await {
+                    error!("Failed to send initial node discovery: {}", e);
+                } else {
+                    info!("Sent initial node discovery message");
+                }
+            });
+
             tokio::spawn(async move {
                 if let Err(e) = sync_manager_ref
                     .start_sync_loop(move |message| {
@@ -199,6 +211,32 @@ impl Daemon {
                                                     "Created SyncManager with node ID: {}",
                                                     node_id
                                                 );
+
+                                                // Send initial node discovery message for new SyncManager
+                                                let transport_for_discovery =
+                                                    Arc::clone(&transport_for_sync);
+                                                let sync_manager_for_discovery =
+                                                    Arc::clone(&sync_manager_arc);
+                                                tokio::spawn(async move {
+                                                    match sync_manager_for_discovery
+                                                        .create_node_discovery_message()
+                                                        .await
+                                                    {
+                                                        Ok(discovery_message) => {
+                                                            if let Err(e) = transport_for_discovery
+                                                                .send_message(discovery_message)
+                                                                .await
+                                                            {
+                                                                error!("Failed to send initial node discovery: {}", e);
+                                                            } else {
+                                                                info!("Sent initial node discovery message");
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            error!("Failed to create node discovery message: {}", e);
+                                                        }
+                                                    }
+                                                });
 
                                                 // Start sync loop for the new SyncManager
                                                 let transport_for_messages =
