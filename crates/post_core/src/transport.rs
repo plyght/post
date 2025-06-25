@@ -614,11 +614,11 @@ impl Transport for TailscaleTransport {
                     .map_err(|e| PostError::Tailscale(format!("Failed to get status: {}", e)))?;
 
                 for (node_key, peer) in status.peer {
-                    debug!("Node {}: online={}, ips={:?}", node_key, peer.online, peer.tailscale_ips);
+                    info!("Node {}: online={}, ips={:?}", node_key, peer.online, peer.tailscale_ips);
                     if peer.online && !peer.tailscale_ips.is_empty() {
                         // Use the first Tailscale IP
                         nodes.push(peer.tailscale_ips[0].to_string());
-                        debug!("Added node {} to send list", peer.tailscale_ips[0]);
+                        info!("Added node {} to send list", peer.tailscale_ips[0]);
                     }
                 }
             }
@@ -629,17 +629,17 @@ impl Transport for TailscaleTransport {
                     .map_err(|e| PostError::Tailscale(format!("Failed to get status: {}", e)))?;
 
                 for (node_key, peer) in status.peer {
-                    debug!("Node {}: online={}, ips={:?}", node_key, peer.online, peer.tailscale_ips);
+                    info!("Node {}: online={}, ips={:?}", node_key, peer.online, peer.tailscale_ips);
                     if peer.online && !peer.tailscale_ips.is_empty() {
                         // Use the first Tailscale IP
                         nodes.push(peer.tailscale_ips[0].to_string());
-                        debug!("Added node {} to send list", peer.tailscale_ips[0]);
+                        info!("Added node {} to send list", peer.tailscale_ips[0]);
                     }
                 }
             }
         }
 
-        debug!("Found {} online Tailscale nodes", nodes.len());
+        info!("Found {} online Tailscale nodes", nodes.len());
         Ok(nodes)
     }
 
