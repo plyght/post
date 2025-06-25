@@ -1,6 +1,5 @@
 use crate::{config::ClipboardConfig, PostError, Result};
 use copypasta::{ClipboardContext, ClipboardProvider};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -59,9 +58,9 @@ pub fn create_clipboard_with_config(config: &ClipboardConfig) -> Result<Box<dyn 
                         linux::WaylandClipboardType::Clipboard,
                     )?))
                 } else {
-                    return Err(PostError::Clipboard(
+                    Err(PostError::Clipboard(
                         "Wayland clipboard requested but wl-clipboard not available".to_string(),
-                    ));
+                    ))
                 }
             }
             "xclip" => {
@@ -69,9 +68,9 @@ pub fn create_clipboard_with_config(config: &ClipboardConfig) -> Result<Box<dyn 
                     debug!("Creating xclip clipboard (forced via config)");
                     Ok(Box::new(linux::XClipClipboard::new()?))
                 } else {
-                    return Err(PostError::Clipboard(
+                    Err(PostError::Clipboard(
                         "xclip clipboard requested but xclip not available".to_string(),
-                    ));
+                    ))
                 }
             }
             "xsel" => {
@@ -79,16 +78,16 @@ pub fn create_clipboard_with_config(config: &ClipboardConfig) -> Result<Box<dyn 
                     debug!("Creating xsel clipboard (forced via config)");
                     Ok(Box::new(linux::XSelClipboard::new()?))
                 } else {
-                    return Err(PostError::Clipboard(
+                    Err(PostError::Clipboard(
                         "xsel clipboard requested but xsel not available".to_string(),
-                    ));
+                    ))
                 }
             }
             "system" => {
                 debug!("Creating system clipboard (forced via config)");
                 Ok(Box::new(SystemClipboard::new()?))
             }
-            "auto" | _ => {
+            _ => {
                 if linux::is_wayland_session() && config.wayland_fallback {
                     debug!("Creating hybrid Linux clipboard for Wayland/Sway session");
                     Ok(Box::new(linux::HybridLinuxClipboard::new_with_config(
@@ -133,7 +132,7 @@ pub fn create_clipboard_with_config(config: &ClipboardConfig) -> Result<Box<dyn 
                 debug!("Creating Windows system clipboard (forced via config)");
                 Ok(Box::new(SystemClipboard::new()?))
             }
-            "auto" | _ => {
+            _ => {
                 if windows::is_wsl_environment() {
                     debug!("Creating WSL clipboard for WSL environment");
                     Ok(Box::new(windows::WSLClipboard::new()?))
@@ -162,19 +161,17 @@ pub fn create_clipboard_watcher_with_config(
     #[cfg(target_os = "linux")]
     {
         match config.backend.as_str() {
-            "wayland" => {
-                return Err(PostError::Clipboard(
-                    "Pure Wayland clipboard watching not supported, use hybrid mode".to_string(),
-                ));
-            }
+            "wayland" => Err(PostError::Clipboard(
+                "Pure Wayland clipboard watching not supported, use hybrid mode".to_string(),
+            )),
             "xclip" => {
                 if linux::has_xclip() {
                     debug!("Creating xclip clipboard watcher (forced via config)");
                     Ok(Box::new(linux::XClipClipboard::new()?))
                 } else {
-                    return Err(PostError::Clipboard(
+                    Err(PostError::Clipboard(
                         "xclip clipboard watcher requested but xclip not available".to_string(),
-                    ));
+                    ))
                 }
             }
             "xsel" => {
@@ -182,16 +179,16 @@ pub fn create_clipboard_watcher_with_config(
                     debug!("Creating xsel clipboard watcher (forced via config)");
                     Ok(Box::new(linux::XSelClipboard::new()?))
                 } else {
-                    return Err(PostError::Clipboard(
+                    Err(PostError::Clipboard(
                         "xsel clipboard watcher requested but xsel not available".to_string(),
-                    ));
+                    ))
                 }
             }
             "system" => {
                 debug!("Creating system clipboard watcher (forced via config)");
                 Ok(Box::new(SystemClipboard::new()?))
             }
-            "auto" | _ => {
+            _ => {
                 if linux::is_wayland_session() && config.wayland_fallback {
                     debug!("Creating hybrid Linux clipboard watcher for Wayland/Sway session");
                     Ok(Box::new(linux::HybridLinuxClipboard::new_with_config(
@@ -228,7 +225,8 @@ pub fn create_clipboard_watcher_with_config(
                     Ok(Box::new(windows::WSLClipboard::new()?))
                 } else {
                     return Err(PostError::Clipboard(
-                        "WSL clipboard watcher requested but not running in WSL environment".to_string(),
+                        "WSL clipboard watcher requested but not running in WSL environment"
+                            .to_string(),
                     ));
                 }
             }
@@ -236,7 +234,7 @@ pub fn create_clipboard_watcher_with_config(
                 debug!("Creating Windows system clipboard watcher (forced via config)");
                 Ok(Box::new(SystemClipboard::new()?))
             }
-            "auto" | _ => {
+            _ => {
                 if windows::is_wsl_environment() {
                     debug!("Creating WSL clipboard watcher for WSL environment");
                     Ok(Box::new(windows::WSLClipboard::new()?))
@@ -497,8 +495,14 @@ pub mod linux {
         // Environment detection
         diagnostics.push(format!("Wayland session: {}", is_wayland_session()));
         diagnostics.push(format!("Sway session: {}", is_sway_session()));
-        diagnostics.push(format!("Desktop environment: {}", detect_desktop_environment()));
-        diagnostics.push(format!("Best clipboard utility: {}", get_best_clipboard_utility()));
+        diagnostics.push(format!(
+            "Desktop environment: {}",
+            detect_desktop_environment()
+        ));
+        diagnostics.push(format!(
+            "Best clipboard utility: {}",
+            get_best_clipboard_utility()
+        ));
 
         // Environment variables
         diagnostics.push(format!(
@@ -596,7 +600,10 @@ pub mod linux {
         }
 
         if !is_wayland_session() && !has_xclip() && !has_xsel() {
-            diagnostics.push("RECOMMENDATION: Install xclip or xsel package for better X11 clipboard support".to_string());
+            diagnostics.push(
+                "RECOMMENDATION: Install xclip or xsel package for better X11 clipboard support"
+                    .to_string(),
+            );
         }
 
         if is_sway_session() {
@@ -616,6 +623,7 @@ pub mod linux {
         PostError::Clipboard(context)
     }
 
+    #[derive(Clone)]
     pub struct WaylandClipboard {
         clipboard_type: WaylandClipboardType,
     }
@@ -718,9 +726,7 @@ pub mod linux {
     impl XClipClipboard {
         pub fn new() -> Result<Self> {
             if !has_xclip() {
-                return Err(create_contextual_error(
-                    "xclip utility not found",
-                ));
+                return Err(create_contextual_error("xclip utility not found"));
             }
             Ok(Self {
                 last_content: Arc::new(Mutex::new(String::new())),
@@ -780,7 +786,10 @@ pub mod linux {
                 )));
             }
 
-            debug!("Set X11 clipboard contents via xclip: {} chars", content.len());
+            debug!(
+                "Set X11 clipboard contents via xclip: {} chars",
+                content.len()
+            );
             Ok(())
         }
     }
@@ -839,7 +848,10 @@ pub mod linux {
                         *last = current_content.clone();
                         drop(last);
 
-                        debug!("X11 clipboard changed via xclip: {} chars", current_content.len());
+                        debug!(
+                            "X11 clipboard changed via xclip: {} chars",
+                            current_content.len()
+                        );
                         callback(current_content);
                     }
                 }
@@ -856,9 +868,7 @@ pub mod linux {
     impl XSelClipboard {
         pub fn new() -> Result<Self> {
             if !has_xsel() {
-                return Err(create_contextual_error(
-                    "xsel utility not found",
-                ));
+                return Err(create_contextual_error("xsel utility not found"));
             }
             Ok(Self {
                 last_content: Arc::new(Mutex::new(String::new())),
@@ -896,9 +906,10 @@ pub mod linux {
 
             if let Some(stdin) = cmd.stdin.as_mut() {
                 use tokio::io::AsyncWriteExt;
-                stdin.write_all(content.as_bytes()).await.map_err(|e| {
-                    PostError::Clipboard(format!("Failed to write to xsel: {}", e))
-                })?;
+                stdin
+                    .write_all(content.as_bytes())
+                    .await
+                    .map_err(|e| PostError::Clipboard(format!("Failed to write to xsel: {}", e)))?;
                 stdin.shutdown().await.map_err(|e| {
                     PostError::Clipboard(format!("Failed to close xsel stdin: {}", e))
                 })?;
@@ -916,7 +927,10 @@ pub mod linux {
                 )));
             }
 
-            debug!("Set X11 clipboard contents via xsel: {} chars", content.len());
+            debug!(
+                "Set X11 clipboard contents via xsel: {} chars",
+                content.len()
+            );
             Ok(())
         }
     }
@@ -974,7 +988,10 @@ pub mod linux {
                         *last = current_content.clone();
                         drop(last);
 
-                        debug!("X11 clipboard changed via xsel: {} chars", current_content.len());
+                        debug!(
+                            "X11 clipboard changed via xsel: {} chars",
+                            current_content.len()
+                        );
                         callback(current_content);
                     }
                 }
@@ -999,22 +1016,20 @@ pub mod linux {
         pub fn new_with_config(config: &ClipboardConfig) -> Result<Self> {
             let system_clipboard = SystemClipboard::new()?;
 
-            let wayland_clipboard = if is_wayland_session()
-                && has_wl_clipboard()
-                && config.wayland_fallback
-            {
-                debug!(
+            let wayland_clipboard =
+                if is_wayland_session() && has_wl_clipboard() && config.wayland_fallback {
+                    debug!(
                     "Detected Wayland session with wl-clipboard, enabling hybrid clipboard support"
                 );
 
-                if config.sway_optimizations && is_sway_session() {
-                    debug!("Enabling Sway-specific clipboard optimizations");
-                }
+                    if config.sway_optimizations && is_sway_session() {
+                        debug!("Enabling Sway-specific clipboard optimizations");
+                    }
 
-                Some(WaylandClipboard::new(WaylandClipboardType::Clipboard)?)
-            } else {
-                None
-            };
+                    Some(WaylandClipboard::new(WaylandClipboardType::Clipboard)?)
+                } else {
+                    None
+                };
 
             Ok(Self {
                 wayland_clipboard,
@@ -1121,7 +1136,7 @@ pub mod linux {
 
                     // Try Wayland clipboard first if available
                     let current_content = if let Some(ref wayland_cb) = wayland_clipboard {
-                        match wayland_cb.get_contents().await {
+                        match wayland_cb.get_contents().await as Result<String> {
                             Ok(content) => content,
                             Err(_) => {
                                 // Fall back to system clipboard
@@ -1167,6 +1182,7 @@ pub mod linux {
 pub mod macos {
     use super::*;
     use std::os::raw::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     extern "C" {
         fn NSPasteboardNameGeneral() -> *const c_void;
@@ -1223,20 +1239,23 @@ pub mod windows {
     use super::*;
     use std::env;
     use std::fs;
-    use tokio::process::Command as TokioCommand;
     use std::process::Command;
+    use tokio::process::Command as TokioCommand;
 
     pub fn is_wsl_environment() -> bool {
         // Check for WSL-specific environment variables
-        if env::var("WSL_DISTRO_NAME").is_ok() 
-            || env::var("WSL_INTEROP").is_ok() 
-            || env::var("WSLENV").is_ok() {
+        if env::var("WSL_DISTRO_NAME").is_ok()
+            || env::var("WSL_INTEROP").is_ok()
+            || env::var("WSLENV").is_ok()
+        {
             return true;
         }
 
         // Check for WSL in /proc/version (fallback for WSL1)
         if let Ok(version) = fs::read_to_string("/proc/version") {
-            if version.to_lowercase().contains("microsoft") || version.to_lowercase().contains("wsl") {
+            if version.to_lowercase().contains("microsoft")
+                || version.to_lowercase().contains("wsl")
+            {
                 return true;
             }
         }
@@ -1279,10 +1298,16 @@ pub mod windows {
         // Environment detection
         diagnostics.push(format!("WSL environment: {}", is_wsl_environment()));
         diagnostics.push(format!("clip.exe available: {}", is_clip_exe_available()));
-        diagnostics.push(format!("PowerShell available: {}", is_powershell_available()));
+        diagnostics.push(format!(
+            "PowerShell available: {}",
+            is_powershell_available()
+        ));
 
         // Environment variables
-        diagnostics.push(format!("WSL_DISTRO_NAME: {:?}", env::var("WSL_DISTRO_NAME")));
+        diagnostics.push(format!(
+            "WSL_DISTRO_NAME: {:?}",
+            env::var("WSL_DISTRO_NAME")
+        ));
         diagnostics.push(format!("WSL_INTEROP: {:?}", env::var("WSL_INTEROP")));
         diagnostics.push(format!("WSLENV: {:?}", env::var("WSLENV")));
 
@@ -1318,7 +1343,10 @@ pub mod windows {
 
         // Recommendations
         if is_wsl_environment() && !is_clip_exe_available() {
-            diagnostics.push("RECOMMENDATION: Ensure Windows clipboard utilities are available from WSL".to_string());
+            diagnostics.push(
+                "RECOMMENDATION: Ensure Windows clipboard utilities are available from WSL"
+                    .to_string(),
+            );
         }
 
         Ok(diagnostics.join("\n"))
@@ -1367,7 +1395,12 @@ pub mod windows {
                     .arg("Text")
                     .output()
                     .await
-                    .map_err(|e| PostError::Clipboard(format!("Failed to execute PowerShell Get-Clipboard: {}", e)))?;
+                    .map_err(|e| {
+                        PostError::Clipboard(format!(
+                            "Failed to execute PowerShell Get-Clipboard: {}",
+                            e
+                        ))
+                    })?;
 
                 if !output.status.success() {
                     // Empty clipboard is not an error
@@ -1375,17 +1408,23 @@ pub mod windows {
                         return Ok(String::new());
                     }
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(PostError::Clipboard(format!("PowerShell Get-Clipboard failed: {}", stderr)));
+                    return Err(PostError::Clipboard(format!(
+                        "PowerShell Get-Clipboard failed: {}",
+                        stderr
+                    )));
                 }
 
-                let content = String::from_utf8(output.stdout)
-                    .map_err(|e| PostError::Clipboard(format!("Invalid UTF-8 in clipboard: {}", e)))?;
-                    
+                let content = String::from_utf8(output.stdout).map_err(|e| {
+                    PostError::Clipboard(format!("Invalid UTF-8 in clipboard: {}", e))
+                })?;
+
                 // Remove trailing newline that PowerShell adds
                 Ok(content.trim_end().to_string())
             } else {
                 // Fallback: try to use clip.exe in a roundabout way (though it's primarily for setting)
-                Err(PostError::Clipboard("Cannot read from clipboard: PowerShell not available".to_string()))
+                Err(PostError::Clipboard(
+                    "Cannot read from clipboard: PowerShell not available".to_string(),
+                ))
             }
         }
 
@@ -1395,7 +1434,9 @@ pub mod windows {
                 let mut cmd = TokioCommand::new("clip.exe")
                     .stdin(std::process::Stdio::piped())
                     .spawn()
-                    .map_err(|e| PostError::Clipboard(format!("Failed to execute clip.exe: {}", e)))?;
+                    .map_err(|e| {
+                        PostError::Clipboard(format!("Failed to execute clip.exe: {}", e))
+                    })?;
 
                 if let Some(stdin) = cmd.stdin.as_mut() {
                     use tokio::io::AsyncWriteExt;
@@ -1407,10 +1448,9 @@ pub mod windows {
                     })?;
                 }
 
-                let status = cmd
-                    .wait()
-                    .await
-                    .map_err(|e| PostError::Clipboard(format!("Failed to wait for clip.exe: {}", e)))?;
+                let status = cmd.wait().await.map_err(|e| {
+                    PostError::Clipboard(format!("Failed to wait for clip.exe: {}", e))
+                })?;
 
                 if !status.success() {
                     return Err(PostError::Clipboard(format!(
@@ -1419,7 +1459,10 @@ pub mod windows {
                     )));
                 }
 
-                debug!("Set WSL clipboard contents via clip.exe: {} chars", content.len());
+                debug!(
+                    "Set WSL clipboard contents via clip.exe: {} chars",
+                    content.len()
+                );
                 Ok(())
             } else if is_powershell_available() {
                 // Fallback to PowerShell Set-Clipboard
@@ -1429,12 +1472,16 @@ pub mod windows {
                     .arg("-Value")
                     .arg(content)
                     .spawn()
-                    .map_err(|e| PostError::Clipboard(format!("Failed to execute PowerShell Set-Clipboard: {}", e)))?;
+                    .map_err(|e| {
+                        PostError::Clipboard(format!(
+                            "Failed to execute PowerShell Set-Clipboard: {}",
+                            e
+                        ))
+                    })?;
 
-                let status = cmd
-                    .wait()
-                    .await
-                    .map_err(|e| PostError::Clipboard(format!("Failed to wait for PowerShell: {}", e)))?;
+                let status = cmd.wait().await.map_err(|e| {
+                    PostError::Clipboard(format!("Failed to wait for PowerShell: {}", e))
+                })?;
 
                 if !status.success() {
                     return Err(PostError::Clipboard(format!(
@@ -1443,10 +1490,15 @@ pub mod windows {
                     )));
                 }
 
-                debug!("Set WSL clipboard contents via PowerShell: {} chars", content.len());
+                debug!(
+                    "Set WSL clipboard contents via PowerShell: {} chars",
+                    content.len()
+                );
                 Ok(())
             } else {
-                Err(PostError::Clipboard("Cannot set clipboard: neither clip.exe nor PowerShell available".to_string()))
+                Err(PostError::Clipboard(
+                    "Cannot set clipboard: neither clip.exe nor PowerShell available".to_string(),
+                ))
             }
         }
     }
@@ -1493,7 +1545,9 @@ pub mod windows {
 
                         match output {
                             Ok(output) if output.status.success() => {
-                                String::from_utf8_lossy(&output.stdout).trim_end().to_string()
+                                String::from_utf8_lossy(&output.stdout)
+                                    .trim_end()
+                                    .to_string()
                             }
                             _ => {
                                 warn!("Failed to check WSL clipboard via PowerShell");

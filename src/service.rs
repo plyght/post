@@ -2,6 +2,7 @@ use crate::{PostError, Result};
 use std::path::Path;
 
 /// XML escape utility function for plist generation
+#[allow(dead_code)]
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -187,7 +188,7 @@ WantedBy=default.target
 
         // Reload systemd and enable the service
         let reload_output = tokio::process::Command::new("systemctl")
-            .args(&["--user", "daemon-reload"])
+            .args(["--user", "daemon-reload"])
             .output()
             .await
             .map_err(PostError::Io)?;
@@ -201,7 +202,7 @@ WantedBy=default.target
         }
 
         let enable_output = tokio::process::Command::new("systemctl")
-            .args(&["--user", "enable", "post-daemon.service"])
+            .args(["--user", "enable", "post-daemon.service"])
             .output()
             .await
             .map_err(PostError::Io)?;
@@ -215,7 +216,7 @@ WantedBy=default.target
         }
 
         let start_output = tokio::process::Command::new("systemctl")
-            .args(&["--user", "start", "post-daemon.service"])
+            .args(["--user", "start", "post-daemon.service"])
             .output()
             .await
             .map_err(PostError::Io)?;
@@ -244,12 +245,12 @@ WantedBy=default.target
         if service_path.exists() {
             // Stop and disable the service
             let _ = tokio::process::Command::new("systemctl")
-                .args(&["--user", "stop", "post-daemon.service"])
+                .args(["--user", "stop", "post-daemon.service"])
                 .output()
                 .await;
 
             let _ = tokio::process::Command::new("systemctl")
-                .args(&["--user", "disable", "post-daemon.service"])
+                .args(["--user", "disable", "post-daemon.service"])
                 .output()
                 .await;
 
@@ -258,7 +259,7 @@ WantedBy=default.target
 
             // Reload systemd
             let _ = tokio::process::Command::new("systemctl")
-                .args(&["--user", "daemon-reload"])
+                .args(["--user", "daemon-reload"])
                 .output()
                 .await;
 
