@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use x25519_dalek;
 
 pub struct SyncManager {
@@ -272,8 +272,16 @@ impl SyncManager {
             data.content.len()
         );
 
-        self.clipboard.set_contents(&data.content).await?;
-        *last_hash = content_hash;
+        match self.clipboard.set_contents(&data.content).await {
+            Ok(()) => {
+                info!("Successfully set clipboard contents on Linux");
+                *last_hash = content_hash;
+            }
+            Err(e) => {
+                error!("Failed to set clipboard contents on Linux: {}", e);
+                return Err(e);
+            }
+        }
 
         Ok(())
     }

@@ -10,6 +10,7 @@ pub struct PostConfig {
     pub security: SecurityConfig,
     pub ui: UiConfig,
     pub filters: FilterConfig,
+    pub clipboard: ClipboardConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +56,35 @@ pub struct FilterConfig {
     pub exclude_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardConfig {
+    /// Force specific clipboard backend (auto, system, wayland, x11)
+    pub backend: String,
+    /// Enable wl-clipboard fallback for Wayland sessions
+    pub wayland_fallback: bool,
+    /// Polling interval for clipboard changes in milliseconds
+    pub poll_interval_ms: u64,
+    /// Maximum clipboard content size to sync (in bytes)
+    pub max_content_size: usize,
+    /// Enable Sway-specific optimizations
+    pub sway_optimizations: bool,
+    /// Priority order for clipboard selections (clipboard, primary)
+    pub selection_priority: Vec<String>,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            backend: "auto".to_string(),
+            wayland_fallback: true,
+            poll_interval_ms: 500,
+            max_content_size: 1024 * 1024, // 1MB
+            sway_optimizations: true,
+            selection_priority: vec!["clipboard".to_string(), "primary".to_string()],
+        }
+    }
+}
+
 impl Default for PostConfig {
     fn default() -> Self {
         Self {
@@ -90,6 +120,14 @@ impl Default for PostConfig {
                 js_hooks: vec![],
                 max_length: Some(10_000),
                 exclude_patterns: vec![],
+            },
+            clipboard: ClipboardConfig {
+                backend: "auto".to_string(),
+                wayland_fallback: true,
+                poll_interval_ms: 500,
+                max_content_size: 1024 * 1024, // 1MB
+                sway_optimizations: true,
+                selection_priority: vec!["clipboard".to_string(), "primary".to_string()],
             },
         }
     }
