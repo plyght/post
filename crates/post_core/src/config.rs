@@ -58,7 +58,7 @@ pub struct FilterConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardConfig {
-    /// Force specific clipboard backend (auto, system, wayland, x11)
+    /// Force specific clipboard backend (auto, system, wayland, xclip, xsel, wsl, windows)
     pub backend: String,
     /// Enable wl-clipboard fallback for Wayland sessions
     pub wayland_fallback: bool,

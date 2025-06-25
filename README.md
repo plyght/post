@@ -44,7 +44,8 @@ post/
 ### Core Components
 
 - **post_core**: Core library containing all fundamental functionality
-  - Clipboard operations and monitoring
+  - Multi-platform clipboard operations and monitoring (Linux, macOS, Windows, WSL)
+  - Intelligent clipboard backend selection with automatic fallback
   - End-to-end encryption using ChaCha20-Poly1305 and X25519
   - Peer discovery and synchronization logic
   - Tailscale integration for network connectivity
@@ -79,10 +80,72 @@ post/
 - 🌐 Peer-to-peer network discovery via Tailscale
 - 🔄 Background daemon operation with service integration
 - 📊 Terminal-based monitoring interface with real-time updates
-- 🖥️ Cross-platform support (Linux, macOS, Windows)
+- 🖥️ Cross-platform support (Linux, macOS, Windows, WSL) with intelligent clipboard backend selection
 - ⚡ Low-latency clipboard detection and synchronization
+- 🔧 Multiple clipboard backends (wl-clipboard, xclip, xsel, native APIs) with automatic fallback
 - 🔧 Flexible configuration system
 - 📝 Structured logging and diagnostics
+
+## Clipboard Support
+
+Post provides comprehensive clipboard integration across all major platforms with automatic detection and fallback mechanisms:
+
+### Linux
+- **Wayland**: `wl-clipboard` (wl-copy/wl-paste) - recommended for Wayland sessions
+- **X11**: `xclip` or `xsel` - automatic detection and preference for X11 sessions  
+- **Hybrid**: Combines Wayland and X11 support for maximum compatibility
+- **Desktop Environments**: Automatic detection for KDE, GNOME, i3, dwm, Sway, and others
+- **System**: Fallback to system clipboard APIs
+
+### Windows
+- **Native**: Windows system clipboard API
+- **WSL**: Integrated Windows clipboard access via clip.exe and PowerShell
+- **Auto-detection**: Automatically detects WSL environment and uses appropriate backend
+
+### macOS
+- **Native**: macOS system clipboard with Universal Clipboard support
+- **Advanced**: Pasteboard change detection for efficient monitoring
+
+### Installation Requirements
+
+**Linux (choose one or more):**
+```bash
+# Ubuntu/Debian
+sudo apt install wl-clipboard xclip  # or xsel
+
+# Fedora/RHEL
+sudo dnf install wl-clipboard xclip  # or xsel
+
+# Arch Linux
+sudo pacman -S wl-clipboard xclip    # or xsel
+```
+
+**WSL:**
+Ensure Windows clipboard utilities are accessible:
+- PowerShell (recommended for reading)
+- clip.exe (for writing)
+
+### Configuration
+
+The clipboard backend can be configured in `config.toml`:
+
+```toml
+[clipboard]
+# Backend selection: auto, system, wayland, xclip, xsel, wsl, windows
+backend = "auto"
+
+# Enable Wayland fallback for hybrid environments
+wayland_fallback = true
+
+# Polling interval for clipboard changes (milliseconds)
+poll_interval_ms = 500
+
+# Maximum clipboard content size (bytes)
+max_content_size = 1048576
+
+# Enable Sway-specific optimizations
+sway_optimizations = true
+```
 
 ## Installation
 
@@ -92,8 +155,9 @@ post/
 - Tailscale installed and configured on all devices
 - Platform-specific dependencies:
   - **macOS**: Xcode command line tools
-  - **Linux**: X11 or Wayland development libraries
+  - **Linux**: X11 or Wayland development libraries, clipboard utilities (see Clipboard Support section)
   - **Windows**: Visual Studio Build Tools
+  - **WSL**: Windows clipboard integration (clip.exe, PowerShell)
 
 ### Building from Source
 
@@ -157,6 +221,9 @@ post peers
 # Configuration management
 post config --show
 post config --set key=value
+
+# Clipboard diagnostics
+post clipboard-diag
 ```
 
 ### TUI Interface
@@ -203,13 +270,20 @@ tailscale_socket = "/var/run/tailscale/tailscaled.sock"
 port = 8412
 
 [clipboard]
-# Maximum clipboard content size (bytes)
-max_size = 1048576  # 1MB
+# Backend selection: auto, system, wayland, xclip, xsel, wsl, windows
+backend = "auto"
 
-# Content types to synchronize
-sync_text = true
-sync_images = false
-sync_files = false
+# Enable Wayland fallback for hybrid environments  
+wayland_fallback = true
+
+# Polling interval for clipboard changes (milliseconds)
+poll_interval_ms = 500
+
+# Maximum clipboard content size (bytes)
+max_content_size = 1048576
+
+# Enable Sway-specific optimizations
+sway_optimizations = true
 
 [encryption]
 # Key derivation rounds (higher = more secure, slower)
@@ -269,6 +343,9 @@ Platform-specific implementations are isolated using:
 - Confirm all nodes are connected to the same Tailscale network
 - Check firewall settings for the configured port
 - Verify clipboard permissions on the local system
+- Run clipboard diagnostics: `post clipboard-diag`
+- Ensure required clipboard utilities are installed (see Clipboard Support section)
+- Try different clipboard backends in configuration if auto-detection fails
 
 **Performance issues:**
 - Reduce sync frequency in configuration
