@@ -354,8 +354,38 @@ impl Daemon {
         while let Some(message) = rx.recv().await {
             let sync_manager_guard = sync_manager_clone.lock().await;
             if let Some(ref sync_manager) = *sync_manager_guard {
-                if let Err(e) = sync_manager.handle_message(message).await {
-                    error!("Failed to handle message: {}", e);
+                if let Err(e) = sync_manager.handle_message(message.clone()).await {
+                    // If we get a "No verifying key found" error, send node discovery
+                    if e.to_string().contains("No verifying key found for node") {
+                        info!("Unknown node detected, sending node discovery");
+                        let transport_for_discovery = Arc::clone(&self.transport);
+                        let sync_manager_for_discovery = Arc::clone(sync_manager);
+                        tokio::spawn(async move {
+                            match sync_manager_for_discovery
+                                .create_node_discovery_message()
+                                .await
+                            {
+                                Ok(discovery_message) => {
+                                    if let Err(e) = transport_for_discovery
+                                        .send_message(discovery_message)
+                                        .await
+                                    {
+                                        debug!("Failed to send reactive node discovery: {}", e);
+                                    } else {
+                                        info!("Sent reactive node discovery message");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to create reactive node discovery message: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        });
+                    } else {
+                        error!("Failed to handle message: {}", e);
+                    }
                 }
             } else {
                 debug!("Received message but no SyncManager available - ignoring");
