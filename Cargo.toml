@@ -1,0 +1,70 @@
+[workspace]
+members = [
+    "crates/post_core",
+    "crates/post_daemon",
+    "crates/post_tui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Post Contributors"]
+repository = "https://github.com/yourorg/post"
+
+[workspace.dependencies]
+tokio = { version = "1.0", features = ["full"] }
+copypasta = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_bytes = "0.11"
+toml = "0.8"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dirs = "5.0"
+noise-protocol = "0.2"
+noise-rust-crypto = "0.6"
+ratatui = "0.26"
+crossterm = "0.27"
+clap = { version = "4.0", features = ["derive"] }
+async-trait = "0.1"
+tailscale-localapi = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
+notify-rust = "4.10"
+
+[package]
+name = "post"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+post_core = { path = "crates/post_core" }
+post_daemon = { path = "crates/post_daemon" }
+post_tui = { path = "crates/post_tui", optional = true }
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+toml.workspace = true
+dirs.workspace = true
+signal-hook = "0.3"
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+futures-util = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["signal"] }
+
+[features]
+default = ["tui"]
+tui = ["dep:post_tui"]
+
+[[bin]]
+name = "post"
+path = "src/main.rs"

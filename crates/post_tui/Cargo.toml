@@ -1,0 +1,19 @@
+[package]
+name = "post_tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Terminal UI for Post clipboard synchronization"
+
+[dependencies]
+post_core = { path = "../post_core" }
+tokio.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+serde.workspace = true
+chrono = { version = "0.4", features = ["serde"] }

@@ -1,0 +1,38 @@
+[package]
+name = "post_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core clipboard synchronization primitives for Post"
+
+[dependencies]
+tokio.workspace = true
+copypasta.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_bytes.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chacha20poly1305 = "0.10"
+x25519-dalek = "2.0"
+ed25519-dalek = "2.0"
+blake2 = "0.10"
+rand = "0.8"
+secrecy = "0.8"
+toml.workspace = true
+dirs.workspace = true
+hostname = "0.3"
+async-trait.workspace = true
+tailscale-localapi.workspace = true
+reqwest.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.25"
+core-foundation = "0.9"
+
+[features]
+default = []
