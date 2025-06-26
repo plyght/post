@@ -34,6 +34,11 @@ async-trait = "0.1"
 tailscale-localapi = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
 notify-rust = "4.10"
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [package]
 name = "post"

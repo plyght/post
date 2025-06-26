@@ -5,6 +5,8 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 mod notifications;
+mod api;
+
 use notifications::NotificationManager;
 
 pub struct Daemon {
@@ -103,6 +105,25 @@ impl Daemon {
         tokio::spawn(async move {
             if let Err(e) = transport_clone.start_listening(tx).await {
                 error!("Transport listener failed: {}", e);
+            }
+        });
+
+        // Start HTTP API server
+        let config_clone = Arc::new(self.config.clone());
+        let sync_manager_api = Arc::clone(&self.sync_manager);
+        let clipboard_api = Arc::clone(&self.clipboard);
+        let transport_api = Arc::clone(&self.transport);
+
+        tokio::spawn(async move {
+            if let Err(e) = crate::api::start_api_server(
+                config_clone,
+                sync_manager_api,
+                clipboard_api,
+                transport_api,
+            )
+            .await
+            {
+                error!("HTTP API server failed: {}", e);
             }
         });
 

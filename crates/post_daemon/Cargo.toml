@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Background daemon for Post clipboard synchronization"
+description = "Background daemon library for Post clipboard synchronization"
 
 [dependencies]
 post_core = { path = "../post_core" }
@@ -22,6 +22,11 @@ signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 futures-util = "0.3"
 dirs = "5.0"
 notify-rust.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+uuid.workspace = true
+chrono.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["process", "signal"] }
