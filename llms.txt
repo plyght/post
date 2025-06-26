@@ -1,0 +1,986 @@
+# Post - Secure Distributed Clipboard Synchronization System
+## Comprehensive Technical Documentation for AI Systems
+
+---
+
+## Project Overview and Core Philosophy
+
+Post is a secure, distributed clipboard synchronization system designed with a **security-first, cross-platform compatibility** approach. The system enables seamless clipboard sharing across multiple devices using encrypted peer-to-peer communication over Tailscale mesh networks. The architecture prioritizes **zero-trust security**, **platform-native integration**, and **graceful degradation** across diverse computing environments.
+
+**Core Design Principles:**
+- **Security by Design**: End-to-end encryption with perfect forward secrecy
+- **Platform Native**: Leverages platform-specific APIs for optimal performance
+- **Fault Tolerant**: Intelligent fallback mechanisms at every layer
+- **User Experience First**: Background operation with minimal user intervention
+- **Developer Friendly**: Modular architecture enabling easy extension and testing
+
+---
+
+## Architecture Deep Dive
+
+### Rust Workspace Structure and Design Philosophy
+
+The project uses a **modular workspace architecture** that separates concerns cleanly:
+
+```
+post/
+├── crates/
+│   ├── post_core/          # Platform-agnostic business logic
+│   ├── post_daemon/        # Background service and HTTP API
+│   └── post_tui/           # Optional terminal interface
+├── src/                    # Main CLI application
+├── ios/                    # iOS companion app
+└── target/                 # Build artifacts
+```
+
+**Key Architectural Decisions:**
+
+1. **Trait-Based Abstraction Layer**: Uses dynamic dispatch (`Arc<dyn Trait>`) for runtime platform selection
+2. **Async-First Design**: Built on tokio runtime with structured concurrency patterns
+3. **Error Transparency**: Custom error types with contextual information using `thiserror`
+4. **Configuration-Driven**: TOML-based configuration with intelligent defaults
+5. **Security Isolation**: Crypto operations isolated in dedicated modules
+
+### Cross-Platform Compatibility Strategy
+
+The system handles dramatic differences between platforms through:
+
+**Conditional Compilation Strategy:**
+```rust
+#[cfg(target_os = "linux")]
+pub mod linux_clipboard;
+#[cfg(target_os = "macos")]
+pub mod macos_clipboard;
+#[cfg(target_os = "windows")]
+pub mod windows_clipboard;
+```
+
+**Runtime Platform Detection:**
+- **Linux**: Detects Wayland vs X11, desktop environment, available clipboard utilities
+- **macOS**: Handles NSPasteboard threading restrictions, Universal Clipboard integration
+- **Windows**: Distinguishes WSL vs native Windows, handles Unicode properly
+- **iOS**: Manages UIPasteboard restrictions, background processing limitations
+
+---
+
+## Security Architecture and Cryptographic Implementation
+
+### Modern Cryptographic Stack
+
+**Core Cryptographic Primitives:**
+- **Symmetric Encryption**: ChaCha20-Poly1305 (AEAD - provides both confidentiality and authenticity)
+- **Key Agreement**: X25519 elliptic curve Diffie-Hellman (perfect forward secrecy)
+- **Digital Signatures**: Ed25519 (compact signatures, fast verification)
+- **Key Derivation**: HKDF-SHA256 (proper key material expansion)
+- **Hashing**: Blake2s-256 (fast, cryptographically secure)
+
+**Security Design Decisions:**
+
+1. **Perfect Forward Secrecy**: X25519 ephemeral keys rotated every 24 hours
+2. **Authenticated Encryption**: ChaCha20-Poly1305 prevents both eavesdropping and tampering
+3. **Replay Attack Prevention**: 64-bit nonce counters prevent message replay
+4. **Key Binding**: Ed25519 signatures prevent key substitution attacks
+5. **Secure Memory**: `secrecy` crate prevents key material from being swapped to disk
+
+### Cryptographic Session Management
+
+```rust
+pub struct CryptoSession {
+    cipher: Arc<Mutex<ChaCha20Poly1305>>,
+    nonce_counter: Arc<Mutex<u64>>,
+    peer_public_key: [u8; 32],
+    session_start: Instant,
+}
+```
+
+**Session Lifecycle:**
+1. **Key Exchange**: X25519 ECDH generates shared secret
+2. **Key Derivation**: HKDF derives encryption key with peer-specific salt
+3. **Session Establishment**: ChaCha20-Poly1305 cipher initialized
+4. **Message Processing**: Each message uses incremented nonce
+5. **Session Rotation**: Automatic rotation after 24 hours or 100,000 messages
+
+**Security Considerations:**
+- **Nonce Management**: 96-bit nonces (32-bit constant + 64-bit counter) prevent reuse
+- **Key Validation**: Checks for weak keys (all zeros) and invalid curve points
+- **Signature Verification**: All messages must be properly signed before processing
+- **Resource Limits**: Maximum message size (1MB) prevents DoS attacks
+
+---
+
+## Platform-Specific Clipboard Implementation Details
+
+### Linux Clipboard Complexity
+
+Linux clipboard handling is the most complex due to fragmented desktop environments:
+
+**Clipboard Backend Hierarchy:**
+1. **Wayland**: `wl-clipboard` (wl-copy/wl-paste) - modern, secure
+2. **X11**: `xclip` preferred over `xsel` (better Unicode support)
+3. **Hybrid**: Combines Wayland and X11 for maximum compatibility
+4. **System**: Fallback to native clipboard APIs
+
+**Intelligent Detection Logic:**
+```rust
+pub fn detect_best_clipboard() -> Result<Box<dyn ClipboardManager>> {
+    // Environment variable detection
+    let wayland_display = env::var("WAYLAND_DISPLAY").is_ok();
+    let session_type = env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    
+    // Desktop environment detection
+    let desktop = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    
+    // Tool availability checking
+    let has_wl_clipboard = Command::new("which").arg("wl-copy").output()
+        .map(|o| o.status.success()).unwrap_or(false);
+    
+    // Intelligent selection with fallback chain
+    match (wayland_display, has_wl_clipboard, desktop.as_str()) {
+        (true, true, _) => Ok(Box::new(WaylandClipboard::new())),
+        (_, _, "GNOME") => try_x11_with_gnome_workarounds(),
+        (_, _, "KDE") => try_x11_with_kde_integration(),
+        _ => try_best_available_x11_tool(),
+    }
+}
+```
+
+**Sway Window Manager Optimizations:**
+- **Special Handling**: Sway requires specific wl-clipboard invocation patterns
+- **Permission Model**: Handles Wayland's stricter security model
+- **Multi-seat Support**: Manages multiple Wayland displays
+
+### macOS-Specific Considerations
+
+**NSPasteboard Threading Restrictions:**
+- **Main Thread Requirement**: NSPasteboard operations must run on main thread
+- **Daemon Mode Challenges**: `fork()` breaks NSPasteboard access
+- **Process Spawning**: Uses `pbcopy`/`pbpaste` instead of NSPasteboard in daemon mode
+
+**Universal Clipboard Integration:**
+- **Handoff Support**: Respects macOS clipboard continuity features
+- **Privacy Controls**: Handles macOS clipboard access permissions
+- **Change Detection**: Efficient pasteboard change count monitoring
+
+### Windows and WSL Integration
+
+**Native Windows Support:**
+- **Unicode Handling**: Proper UTF-16 to UTF-8 conversion
+- **System Clipboard API**: Direct Win32 clipboard access
+- **Permission Model**: Handles Windows clipboard access rights
+
+**WSL Integration Complexity:**
+```rust
+pub struct WSLClipboard {
+    // Uses PowerShell for reading (better Unicode support)
+    read_command: String,  // "powershell.exe -Command Get-Clipboard"
+    // Uses clip.exe for writing (faster, more reliable)
+    write_command: String, // "clip.exe"
+}
+```
+
+**WSL-Specific Challenges:**
+- **Path Translation**: Handles WSL to Windows path conversion
+- **Unicode Encoding**: Proper handling of non-ASCII characters
+- **Process Boundaries**: Manages WSL/Windows process interaction
+- **Performance**: Optimizes for WSL I/O overhead
+
+### iOS Clipboard and Background Processing
+
+**iOS UIPasteboard Limitations:**
+- **No Change Notifications**: iOS doesn't provide clipboard change callbacks
+- **Polling Strategy**: 500ms timer-based monitoring for responsive detection
+- **Privacy Controls**: iOS 14+ clipboard access restrictions
+- **Background Limitations**: Clipboard access restricted in background
+
+**iOS 26 Background Processing Revolution:**
+```swift
+// BGContinuedProcessingTask - iOS 26 beta feature
+let request = BGContinuedProcessingTaskRequest(identifier: "com.post.clipboard.sync")
+request.title = "Syncing Clipboard"
+request.subtitle = "Synchronizing clipboard across devices"
+
+// System provides native progress UI
+task.setProgress(0.5, title: "Encrypting content", subtitle: "Securing clipboard data")
+```
+
+**Background Task Strategy:**
+- **iOS 26+**: BGContinuedProcessingTask for long-running operations with system UI
+- **Legacy iOS**: UIBackgroundTaskIdentifier with 30-second limit
+- **Task Coordination**: Proper task lifecycle management and expiration handling
+
+---
+
+## Network Transport and Protocol Implementation
+
+### Tailscale Integration Architecture
+
+**Connection Discovery Strategy:**
+```rust
+pub enum TailscaleClient {
+    Unix(LocalApi<UnixStreamClient>),     // Linux/macOS standard
+    Tcp(TcpApiClient),                   // macOS App Store version
+    NamedPipe(NamedPipeClient),          // Windows
+}
+```
+
+**Multi-Path Connection Logic:**
+1. **Unix Socket**: `/var/run/tailscale/tailscaled.sock` (primary on Linux/macOS)
+2. **TCP Connection**: `127.0.0.1:41641` (fallback)
+3. **Dynamic Port**: Reads App Store Tailscale port from `/Library/Tailscale/ipnport`
+4. **Named Pipe**: `\\.\pipe\tailscale` (Windows)
+
+**Robust Connection Handling:**
+- **Continuous Monitoring**: Health checks every 2 seconds
+- **Automatic Reconnection**: Handles Tailscale daemon restarts
+- **Graceful Degradation**: Continues operation if some peers unavailable
+- **Connection Pooling**: Reuses connections for efficiency
+
+### Message Protocol Design
+
+**Message Structure:**
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostMessage {
+    pub version: u8,                    // Protocol version (currently 1)
+    pub message_type: MessageType,      // Enum: ClipboardUpdate, NodeDiscovery, Heartbeat
+    pub timestamp: u64,                 // Unix timestamp for ordering
+    pub sender_id: String,             // Unique node identifier
+    pub sequence: u64,                 // Monotonic sequence number
+    pub data: MessageData,             // Type-specific payload
+    pub signature: Vec<u8>,            // Ed25519 signature of entire message
+}
+
+pub enum MessageData {
+    ClipboardUpdate(ClipboardData),
+    NodeDiscovery(NodeDiscoveryData),
+    Heartbeat(HeartbeatData),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardData {
+    pub content_hash: u64,             // Blake2s hash for deduplication
+    pub content_type: ContentType,     // text, html, url, image
+    pub encrypted_content: Vec<u8>,    // ChaCha20-Poly1305 encrypted
+    pub content_size: u64,             // Original content size
+}
+```
+
+**Protocol Features:**
+- **Version Negotiation**: Forward-compatible protocol versioning
+- **Message Authentication**: Ed25519 signatures prevent tampering
+- **Replay Protection**: Sequence numbers prevent message replay
+- **Content Deduplication**: Blake2s hashing avoids redundant transfers
+- **Size Limits**: 1MB maximum content size prevents DoS
+
+### Sync Logic and Conflict Resolution
+
+**Sequence-Based Ordering:**
+```rust
+pub struct SyncManager {
+    sequence_counter: Arc<Mutex<u64>>,           // Local message sequence
+    last_clipboard_hash: Arc<Mutex<u64>>,       // Deduplication hash
+    peer_sequences: Arc<Mutex<HashMap<String, u64>>>, // Per-peer sequence tracking
+    node_verifying_keys: Arc<Mutex<HashMap<String, [u8; 32]>>>, // Trust management
+}
+```
+
+**Conflict Resolution Strategy:**
+1. **Sequence Number Ordering**: Higher sequence numbers take precedence
+2. **Timestamp Tie-Breaking**: Most recent timestamp wins conflicts
+3. **Node ID Deterministic**: Lexicographically smaller node ID wins identical timestamps
+4. **Content Hash Deduplication**: Identical content (same hash) ignored
+5. **Loop Prevention**: Nodes ignore their own messages bounced back
+
+**Trust and Security Model:**
+- **First-Contact Trust**: First seen public key for node is trusted
+- **Key Binding**: Node IDs permanently bound to public keys
+- **Signature Verification**: All messages verified before processing
+- **Revocation**: Manual key removal for compromised nodes
+
+---
+
+## Performance Optimizations and Resource Management
+
+### Memory Management Strategy
+
+**Efficient Resource Usage:**
+- **Arc<T> Sharing**: Shared ownership for read-heavy data structures
+- **RwLock<T> for Read-Heavy**: Node maps and configuration
+- **Mutex<T> for Write-Heavy**: Sequence counters and mutable state
+- **Bounded Buffers**: Limited queue sizes prevent memory exhaustion
+
+**Content Size Management:**
+```rust
+pub struct ClipboardConfig {
+    pub max_content_size: usize,       // Default: 1MB
+    pub poll_interval_ms: u64,         // Default: 500ms
+    pub sync_interval_s: u64,          // Default: 5s
+    pub max_peers: usize,              // Default: 50
+}
+```
+
+### Network Performance Optimizations
+
+**Concurrent Operations:**
+- **Parallel Peer Communication**: `tokio::spawn` for each peer connection
+- **Non-blocking I/O**: `try_read()` with `WouldBlock` handling
+- **Connection Pooling**: Reuse TCP connections where possible
+- **Batched Discovery**: Efficient peer discovery using concurrent futures
+
+**Bandwidth Optimization:**
+- **Content Deduplication**: Blake2s hashing prevents redundant transfers
+- **Compression**: Optional zstd compression for large content
+- **Delta Sync**: Future: only sync changes, not full content
+- **Rate Limiting**: Configurable sync intervals prevent spam
+
+### Platform-Specific Performance Tuning
+
+**Linux Optimizations:**
+- **Wayland Direct Access**: Bypasses X11 compatibility layer when possible
+- **Tool Selection**: Prefers `wl-clipboard` over `xclip` for performance
+- **Desktop Environment**: Optimizes for detected DE (GNOME, KDE, etc.)
+
+**macOS Optimizations:**
+- **Process Spawning**: Uses `pbcopy`/`pbpaste` to avoid NSPasteboard threading issues
+- **Universal Clipboard**: Respects macOS clipboard continuity
+- **Metal Performance**: Future: hardware-accelerated crypto on Apple Silicon
+
+**iOS Optimizations:**
+- **Battery Efficiency**: Smart polling only when app active
+- **Background Limits**: Proper background task management
+- **Hardware Crypto**: Uses iOS hardware crypto acceleration
+
+---
+
+## Development Patterns and Code Conventions
+
+### Error Handling Philosophy
+
+**Structured Error Management:**
+```rust
+#[derive(Error, Debug)]
+pub enum PostError {
+    #[error("Clipboard error: {source}")]
+    Clipboard { source: String, platform: String },
+    
+    #[error("Network error: {source}")]
+    Network { source: String, peer: Option<String> },
+    
+    #[error("Crypto error: {source}")]
+    Crypto { source: String, operation: String },
+    
+    #[error("Configuration error: {source}")]
+    Config { source: String, file: Option<PathBuf> },
+}
+```
+
+**Error Context Strategy:**
+- **Rich Context**: Errors include platform, operation, and diagnostic information
+- **User-Friendly Messages**: Localized error descriptions for UI display
+- **Debug Information**: Detailed context for debugging and logging
+- **Recovery Hints**: Errors include suggestions for resolution
+
+### Async Patterns and Best Practices
+
+**Structured Concurrency:**
+```rust
+// Health monitoring with proper shutdown
+tokio::select! {
+    _ = shutdown_rx.recv() => {
+        info!("Shutting down clipboard monitor");
+        break;
+    }
+    _ = interval.tick() => {
+        if let Err(e) = check_clipboard_changes().await {
+            warn!("Clipboard check failed: {}", e);
+        }
+    }
+}
+```
+
+**Resource Management:**
+- **Graceful Shutdown**: All background tasks handle shutdown signals
+- **Timeout Management**: Proper timeouts for all network operations
+- **Error Recovery**: Automatic retry with exponential backoff
+- **Resource Cleanup**: Proper Drop implementations for cleanup
+
+### Testing Strategy and Patterns
+
+**Test Architecture:**
+- **Unit Tests**: Individual function and module testing
+- **Integration Tests**: Cross-module interaction testing
+- **Platform Tests**: Platform-specific behavior verification
+- **Crypto Tests**: Cryptographic correctness and security
+- **Network Tests**: Protocol compliance and error handling
+
+**Mock and Test Doubles:**
+```rust
+#[cfg(test)]
+pub struct MockClipboardManager {
+    content: Arc<Mutex<String>>,
+    change_count: Arc<Mutex<u64>>,
+}
+
+#[async_trait]
+impl ClipboardManager for MockClipboardManager {
+    async fn get_contents(&self) -> Result<String> {
+        Ok(self.content.lock().unwrap().clone())
+    }
+    
+    async fn set_contents(&self, content: &str) -> Result<()> {
+        *self.content.lock().unwrap() = content.to_string();
+        *self.change_count.lock().unwrap() += 1;
+        Ok(())
+    }
+}
+```
+
+---
+
+## iOS Implementation Deep Dive
+
+### SwiftUI Architecture and Reactive Programming
+
+**MVVM Pattern Implementation:**
+```swift
+@MainActor
+class PostManager: ObservableObject {
+    @Published var isConnected: Bool = false
+    @Published var syncStatus: SyncStatus = .idle
+    @Published var peers: [PostPeer] = []
+    @Published var clipboardPreview: String = ""
+    
+    private var clipboardMonitor: ClipboardService
+    private var cryptoService: CryptoService
+    private var backgroundTaskManager: PostBackgroundTaskManager
+}
+```
+
+**Reactive Data Flow:**
+- **Combine Publishers**: `@Published` properties drive UI updates
+- **MainActor Isolation**: All UI updates happen on main thread
+- **Cancellable Management**: Proper subscription cleanup
+- **State Management**: Centralized state with clear data flow
+
+### iOS 26 Beta Features Integration
+
+**BGContinuedProcessingTask Implementation:**
+```swift
+// Revolutionary iOS 26 feature for long-running background tasks
+@available(iOS 26.0, *)
+func startBackgroundSync() async {
+    let request = BGContinuedProcessingTaskRequest(identifier: syncTaskIdentifier)
+    request.title = "Syncing Clipboard"
+    request.subtitle = "Synchronizing clipboard across devices"
+    
+    let task = try await BGTaskScheduler.shared.submit(request)
+    
+    // Rich progress reporting with system UI
+    await task.setProgress(0.0, title: "Connecting to peers", subtitle: "Discovering devices")
+    await task.setProgress(0.3, title: "Encrypting content", subtitle: "Securing clipboard data")
+    await task.setProgress(0.7, title: "Syncing with devices", subtitle: "Broadcasting to 3 peers")
+    await task.setProgress(1.0, title: "Sync complete", subtitle: "Clipboard synchronized")
+}
+```
+
+**Legacy Fallback Strategy:**
+```swift
+// iOS < 26 fallback using traditional background tasks
+private func startLegacyBackgroundSync() {
+    let taskId = UIApplication.shared.beginBackgroundTask { [weak self] in
+        self?.endBackgroundTask()
+    }
+    
+    // 30-second time limit for legacy background tasks
+    DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
+        self.endBackgroundTask()
+    }
+}
+```
+
+### App Intents and Shortcuts Deep Integration
+
+**Comprehensive Shortcuts Support:**
+```swift
+struct SyncClipboardIntent: AppIntent {
+    static var title: LocalizedStringResource = "Sync Clipboard"
+    static var description = IntentDescription("Synchronize clipboard across all devices")
+    static var openAppWhenRun: Bool = false
+    
+    @Parameter(title: "Target Device", description: "Specific device to sync with")
+    var targetDevice: DeviceEntity?
+    
+    @Parameter(title: "Show Progress", description: "Display sync progress")
+    var showProgress: Bool = true
+    
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let manager = PostManager.shared
+        
+        if showProgress {
+            try await manager.syncWithProgress()
+        } else {
+            try await manager.syncSilently()
+        }
+        
+        return .result(dialog: "Clipboard synchronized successfully")
+    }
+}
+```
+
+**Voice Command Integration:**
+- **Natural Language**: "Sync my clipboard", "Post my clipboard", "Share clipboard"
+- **Parameter Support**: Device targeting, progress indication
+- **Background Execution**: Seamless operation without app launch
+- **Rich Responses**: Spoken feedback and visual confirmation
+
+### Keychain Integration and Hardware Security
+
+**Hardware-Backed Key Storage:**
+```swift
+class KeychainService {
+    private let service = "com.post.clipboard"
+    
+    func storeKey(_ key: Data, for identifier: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: identifier,
+            kSecValueData as String: key,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw PostError.keychain("Failed to store key: \(status)")
+        }
+    }
+}
+```
+
+**Security Features:**
+- **Device-Only Storage**: Keys never leave the device
+- **Hardware Encryption**: Leverages iOS Secure Enclave when available
+- **Biometric Protection**: Optional Touch ID/Face ID protection
+- **Automatic Cleanup**: Keys removed on app uninstall
+
+### Network Client and Tailscale Integration
+
+**Advanced Network Handling:**
+```swift
+class PostClient {
+    private let session: URLSession
+    private let pathMonitor: NWPathMonitor
+    private var activePeers: [String: PostPeer] = [:]
+    
+    func discoverPeers() async throws -> [PostPeer] {
+        // Concurrent peer discovery using TaskGroup
+        return try await withThrowingTaskGroup(of: PostPeer?.self) { group in
+            for daemon in tailscaleDaemons {
+                group.addTask {
+                    try await self.connectToDaemon(daemon)
+                }
+            }
+            
+            var peers: [PostPeer] = []
+            for try await peer in group {
+                if let peer = peer {
+                    peers.append(peer)
+                }
+            }
+            return peers
+        }
+    }
+}
+```
+
+---
+
+## Configuration System and Platform Adaptation
+
+### Intelligent Configuration Management
+
+**Configuration Hierarchy:**
+1. **Command Line Arguments**: Highest priority
+2. **Environment Variables**: Override config file settings
+3. **Configuration File**: User-specified settings
+4. **Platform Defaults**: Intelligent platform-specific defaults
+5. **Built-in Defaults**: Fallback values
+
+**Platform-Specific Configuration Paths:**
+```rust
+impl PostConfig {
+    pub fn config_dir() -> Result<PathBuf> {
+        #[cfg(target_os = "linux")]
+        return Ok(dirs::config_dir()
+            .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
+            .join("post"));
+            
+        #[cfg(target_os = "macos")]
+        return Ok(dirs::preference_dir()
+            .unwrap_or_else(|| dirs::home_dir().unwrap().join("Library/Preferences"))
+            .join("post"));
+            
+        #[cfg(target_os = "windows")]
+        return Ok(dirs::config_dir()
+            .unwrap_or_else(|| dirs::home_dir().unwrap().join("AppData\\Roaming"))
+            .join("post"));
+    }
+}
+```
+
+**Secure Configuration:**
+- **File Permissions**: Config files created with 0o600 (owner read/write only)
+- **Directory Permissions**: Config directories created with 0o700
+- **Validation**: Configuration values validated on load
+- **Migration**: Automatic migration of old configuration formats
+
+### Dynamic Platform Detection
+
+**Linux Desktop Environment Detection:**
+```rust
+pub fn detect_desktop_environment() -> DesktopEnvironment {
+    let desktop = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let session = env::var("XDG_SESSION_DESKTOP").unwrap_or_default();
+    let wayland = env::var("WAYLAND_DISPLAY").is_ok();
+    
+    match (desktop.as_str(), session.as_str(), wayland) {
+        ("GNOME", _, true) => DesktopEnvironment::GnomeWayland,
+        ("GNOME", _, false) => DesktopEnvironment::GnomeX11,
+        ("KDE", _, true) => DesktopEnvironment::KdeWayland,
+        ("KDE", _, false) => DesktopEnvironment::KdeX11,
+        ("sway", _, _) => DesktopEnvironment::Sway,
+        ("i3", _, _) => DesktopEnvironment::I3,
+        _ => DesktopEnvironment::Unknown,
+    }
+}
+```
+
+---
+
+## Debugging and Troubleshooting Framework
+
+### Comprehensive Logging Strategy
+
+**Structured Logging with tracing:**
+```rust
+use tracing::{info, warn, error, debug, trace, instrument};
+
+#[instrument(skip(self))]
+async fn sync_clipboard(&self) -> Result<()> {
+    debug!("Starting clipboard sync");
+    
+    let content = self.clipboard.get_contents().await
+        .map_err(|e| {
+            error!("Failed to get clipboard contents: {}", e);
+            e
+        })?;
+    
+    info!("Syncing clipboard content (size: {} bytes)", content.len());
+    
+    // ... sync logic
+    
+    info!("Clipboard sync completed successfully");
+    Ok(())
+}
+```
+
+**Log Categories and Levels:**
+- **ERROR**: System failures, security issues, unrecoverable errors
+- **WARN**: Recoverable failures, fallback usage, potential issues
+- **INFO**: Normal operation, sync events, peer connections
+- **DEBUG**: Detailed operation flow, configuration details
+- **TRACE**: Crypto operations, network packets, internal state
+
+### Diagnostic Tools and Health Checks
+
+**Built-in Diagnostics:**
+```bash
+# Comprehensive system diagnostics
+post clipboard-diag
+# Output:
+# ✓ Clipboard backend: wl-clipboard (Wayland)
+# ✓ Fallback available: xclip
+# ✓ Tailscale: Connected (100.64.0.1)
+# ✓ Peers discovered: 3
+# ✓ Crypto: Ed25519 keys valid
+# ⚠ Warning: High sync frequency (100ms)
+```
+
+**Health Check Categories:**
+- **Clipboard Health**: Backend availability, permissions, functionality
+- **Network Health**: Tailscale connectivity, peer reachability, port availability
+- **Crypto Health**: Key validity, session status, signature verification
+- **Performance Health**: Sync frequency, memory usage, CPU usage
+
+### Common Issues and Solutions
+
+**Clipboard Backend Issues:**
+- **Wayland Permission Denied**: Usually requires running under Wayland session
+- **X11 Tool Missing**: Install xclip or xsel packages
+- **WSL Clipboard Broken**: Ensure clip.exe and PowerShell accessible
+- **macOS Daemon Mode**: Use pbcopy/pbpaste instead of NSPasteboard
+
+**Network and Connectivity Issues:**
+- **Tailscale Not Running**: Check `tailscale status` and authentication
+- **Firewall Blocking**: Ensure port 8412 open in firewall
+- **Network Unreachable**: Verify Tailscale mesh connectivity
+- **Peer Discovery Fails**: Check Tailscale local API socket permissions
+
+**Crypto and Security Issues:**
+- **Key Mismatch**: Clear keychain/config and regenerate keys
+- **Signature Verification Failed**: Check system clock synchronization
+- **Encryption Failure**: Verify crypto library installation and versions
+
+---
+
+## API Documentation and Integration Points
+
+### HTTP API Endpoints
+
+**RESTful API Design:**
+```
+POST /api/v1/clipboard/sync
+  - Body: { "content": "...", "force": false }
+  - Response: { "success": true, "peers_notified": 3 }
+
+GET /api/v1/clipboard
+  - Response: { "content": "...", "last_updated": "2024-01-01T00:00:00Z" }
+
+GET /api/v1/status
+  - Response: { "daemon_version": "0.1.0", "uptime": 3600, "peers": [...] }
+
+GET /api/v1/peers
+  - Response: { "peers": [{ "id": "...", "address": "...", "last_seen": "..." }] }
+
+POST /api/v1/config
+  - Body: { "key": "value" }
+  - Response: { "success": true, "restart_required": false }
+```
+
+**API Authentication:**
+- **Local Only**: API only accessible from localhost
+- **Optional Token**: Bearer token support for enhanced security
+- **Rate Limiting**: Configurable rate limits to prevent abuse
+
+### Integration with External Systems
+
+**Service Integration:**
+- **systemd**: Linux service integration with proper dependencies
+- **launchd**: macOS service integration with user agents
+- **Windows Services**: Windows service wrapper for daemon mode
+- **Docker**: Container support with proper networking
+
+**IDE and Editor Integration:**
+- **VS Code Extension**: Clipboard sync status in status bar
+- **Vim Plugin**: Direct clipboard sync commands
+- **Emacs Package**: Integration with Emacs clipboard system
+
+---
+
+## Security Model and Threat Analysis
+
+### Threat Model
+
+**Protected Against:**
+- **Eavesdropping**: End-to-end encryption protects content in transit
+- **Tampering**: Authenticated encryption prevents message modification
+- **Replay Attacks**: Sequence numbers prevent message replay
+- **Key Substitution**: Ed25519 signatures bind keys to node identities
+- **Man-in-the-Middle**: Tailscale mesh provides authenticated channels
+
+**Assumptions:**
+- **Tailscale Security**: Trusts Tailscale for network layer security
+- **Device Security**: Assumes local device is not compromised
+- **Key Management**: Users responsible for key lifecycle management
+
+**Not Protected Against:**
+- **Endpoint Compromise**: Malware on local machine can access clipboard
+- **Social Engineering**: Users can be tricked into installing malicious versions
+- **Physical Access**: Local clipboard still visible to local applications
+
+### Security Best Practices
+
+**Key Management:**
+- **Automatic Rotation**: Keys rotated every 24 hours
+- **Secure Generation**: Cryptographically secure random generation
+- **Secure Storage**: Platform-specific secure storage (Keychain, etc.)
+- **No Plaintext Storage**: Keys never stored in plaintext
+
+**Network Security:**
+- **Encrypted Transport**: All communication over encrypted channels
+- **Authentication**: All peers authenticated before communication
+- **Input Validation**: All network inputs validated and sanitized
+- **Rate Limiting**: Protection against DoS attacks
+
+---
+
+## Performance Benchmarks and Optimization
+
+### Performance Characteristics
+
+**Latency Targets:**
+- **Local Clipboard Detection**: < 100ms
+- **Peer Discovery**: < 2 seconds
+- **Sync Propagation**: < 500ms
+- **Encryption/Decryption**: < 10ms for 1MB content
+
+**Throughput Targets:**
+- **Sync Frequency**: Up to 10 Hz (100ms intervals)
+- **Content Size**: Up to 1MB per clipboard item
+- **Concurrent Peers**: Up to 50 peer connections
+- **Network Bandwidth**: < 1MB/s typical usage
+
+### Optimization Strategies
+
+**CPU Optimization:**
+- **Crypto Hardware Acceleration**: Uses platform-specific crypto acceleration
+- **Efficient Algorithms**: Blake2s for hashing, ChaCha20 for encryption
+- **Minimal Copying**: Zero-copy where possible, Arc for sharing
+- **Async I/O**: Non-blocking operations throughout
+
+**Memory Optimization:**
+- **Bounded Buffers**: Prevents memory exhaustion
+- **Content Compression**: Optional compression for large content
+- **Lazy Loading**: Deferred initialization of expensive resources
+- **Garbage Collection**: Periodic cleanup of stale data
+
+**Network Optimization:**
+- **Connection Pooling**: Reuse connections where possible
+- **Batched Operations**: Group related operations
+- **Compression**: Optional content compression
+- **Intelligent Routing**: Prefer local network peers
+
+---
+
+## Future Architecture and Extensibility
+
+### Planned Features and Extensions
+
+**Enhanced Security:**
+- **Hardware Security Module**: Integration with HSMs for key storage
+- **Zero-Knowledge Sync**: Sync without revealing content to network
+- **Audit Logging**: Comprehensive audit trail for enterprise use
+
+**Advanced Sync Features:**
+- **Conflict Resolution**: Smart merge strategies for conflicting updates
+- **Version History**: Maintain clipboard history with rollback
+- **Selective Sync**: Per-device sync preferences and filtering
+- **Bandwidth Optimization**: Delta sync for large content changes
+
+**Platform Extensions:**
+- **Android Support**: Native Android clipboard integration
+- **Web Extension**: Browser clipboard sync extension
+- **Terminal Integration**: Shell integration for command-line workflows
+
+### Extension Points and Plugin Architecture
+
+**Plugin System Design:**
+```rust
+pub trait ClipboardPlugin: Send + Sync {
+    fn name(&self) -> &str;
+    fn process_content(&self, content: &str) -> Result<String>;
+    fn handles_content_type(&self, content_type: &ContentType) -> bool;
+}
+
+pub struct PluginManager {
+    plugins: Vec<Box<dyn ClipboardPlugin>>,
+}
+```
+
+**Extension Categories:**
+- **Content Processors**: Transform clipboard content (formatting, sanitization)
+- **Transport Plugins**: Alternative network transports (WebRTC, etc.)
+- **Storage Plugins**: Alternative storage backends (database, cloud)
+- **UI Plugins**: Custom user interface components
+
+### Architectural Debt and Refactoring Opportunities
+
+**Known Technical Debt:**
+- **Error Handling**: Some areas could benefit from more specific error types
+- **Configuration**: Could be more modular and extensible
+- **Testing**: Integration test coverage could be expanded
+- **Documentation**: API documentation could be more comprehensive
+
+**Refactoring Opportunities:**
+- **Trait Consolidation**: Some traits could be merged for simplicity
+- **Async Boundaries**: Some sync code could be made async for consistency
+- **Platform Abstraction**: Further platform-specific code isolation
+- **Performance Profiling**: More comprehensive performance monitoring
+
+---
+
+## Development Workflow and Contribution Guidelines
+
+### Build System and Dependencies
+
+**Rust Toolchain Requirements:**
+- **Minimum Rust Version**: 1.70.0 (for async trait support)
+- **Edition**: 2021 (for async improvements)
+- **Features**: Requires std, tokio runtime, platform-specific features
+
+**Platform-Specific Dependencies:**
+```toml
+[target.'cfg(target_os = "linux")'.dependencies]
+copypasta = "0.10"
+x11-clipboard = "0.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+cocoa = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "winbase"] }
+```
+
+### Testing Strategy
+
+**Test Categories:**
+- **Unit Tests**: Individual function correctness
+- **Integration Tests**: Cross-module interaction
+- **Platform Tests**: Platform-specific behavior
+- **Security Tests**: Cryptographic correctness
+- **Performance Tests**: Latency and throughput validation
+
+**Test Execution:**
+```bash
+# Run all tests
+cargo test
+
+# Run specific test categories
+cargo test --test integration_tests
+cargo test --test crypto_tests
+cargo test --test platform_tests
+
+# Run tests with logging
+RUST_LOG=debug cargo test
+
+# Run benchmarks
+cargo bench
+```
+
+### Code Quality Standards
+
+**Formatting and Linting:**
+```bash
+# Format code
+cargo fmt
+
+# Lint code
+cargo clippy -- -D warnings
+
+# Security audit
+cargo audit
+
+# Dependency check
+cargo outdated
+```
+
+**Documentation Standards:**
+- **Public API**: All public functions must have rustdoc comments
+- **Examples**: Complex functions should include usage examples
+- **Safety**: All unsafe code must be documented with safety invariants
+- **Platform Notes**: Platform-specific behavior must be documented
+
+---
+
+This comprehensive documentation provides deep technical insight into the Post clipboard synchronization system, covering architecture, security, platform-specific implementations, performance considerations, and development practices. The system demonstrates sophisticated engineering with attention to security, cross-platform compatibility, and user experience.
